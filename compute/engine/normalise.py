@@ -91,6 +91,7 @@ class SpendSegment:
     month: int  # 1..12
     amount: Decimal  # Rs, exact
     ticket_size: Decimal  # Rs, from the assumptions snapshot
+    merchant_group: str | None = None  # set when the user can distinguish spend by merchant group
     flags: tuple[str, ...] = ()
 
 

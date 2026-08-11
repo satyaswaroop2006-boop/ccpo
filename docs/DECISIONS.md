@@ -65,3 +65,46 @@ weight* (last month with spend, or last category in the UPI mix). This is
 an arbitrary-but-deterministic choice among several valid ones (e.g.
 largest-remainder distribution); it only ever affects the last paisa or two
 of a monthly figure, never the annual total.
+
+---
+
+## 2026-08-11 -- Stage 3 (match.py), Part C SS C.2.1 / SS C.2.6
+
+### 4. Geography-scoped selectors not yet matchable -- gap, not a choice
+
+C.9 Example 8 (syn_travel) has an earning rule selector
+`{"geography": "international"}` (2x points on international spend). Stage
+1's category-mode grid (category, channel, month, amount) carries no
+geography dimension, so Stage 2 (eligibility.py) and Stage 3 (match.py)
+both reject any selector naming `geography` (or `mcc_include`/`mcc_exclude`/
+`networks`/`txn_min`/`txn_max`/`date_from`/`date_to`) rather than silently
+treating it as "always matches" or "never matches" -- either would produce
+wrong numbers without saying so.
+
+This means syn_travel's "intl" rule cannot be evaluated yet. It isn't
+blocking today's Stage 3 scope (syn_points/syn_ecom/syn_fuel don't need
+geography), but it **will** block the golden battery once syn_travel needs
+a golden scenario, and it will block real international-spend cards during
+Phase 5 ingestion. Fix is additive when it's needed: give `CategorySpend`
+(Stage 1) an optional `geography` field the same way `channel` and
+`merchant_group` work today, thread it onto `SpendSegment`, then Stage 2/3
+can drop `geography` from their unsupported-field lists. Flagging now so
+it's on the record before it becomes a blocker.
+
+### 5. `SpendSegment.merchant_group` -- new field, Stage 1 doesn't populate it yet
+
+Stage 3 needs to match `merchant_groups` selectors (syn_points' portal
+bonus, C.9 Example 3), but Stage 1's `SpendSegment` only carried category/
+channel/month/amount/ticket_size. Added `merchant_group: str | None = None`
+to the dataclass (backward compatible -- all existing construction is by
+keyword, confirmed by grep before editing; Stage 1/2's 24 existing tests
+still pass unchanged).
+
+`normalise()` itself is unchanged and does not populate this field --
+there's no input path yet for a user to declare "Rs X of my spend was at
+merchant group Y" the way `CategorySpend.channel` lets them declare a
+channel. Stage 3's own tests construct `SpendSegment` directly with
+`merchant_group` set, bypassing `normalise()`, the same pattern Stage 2's
+tests already used for fields Stage 1 doesn't produce. Wiring a real input
+path through Stage 1 is deferred until a card actually needs it end-to-end
+through the full pipeline (same "additive when needed" posture as #4).
