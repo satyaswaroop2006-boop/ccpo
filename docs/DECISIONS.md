@@ -502,3 +502,45 @@ Rs0) so A.12's Year-1 formula is spec-complete even though no card in the
 modelled anywhere in Part C's schema as read so far). RedemptionFees
 stays deferred exactly as already logged at Stage 8 (#19) -- nothing new
 here, just confirming Stage 11 doesn't need to solve it either.
+
+---
+
+## 2026-08-11 -- breakpoints.py, Part C SS C.0 / Part E SS E.0
+
+### 30. Every breakpoint expressed in spend-domain rupees, caps converted via A.3
+
+C.0's repair-pass pseudocode operates entirely on "exact milestone/waiver-
+eligible spend" and "top-up ... spend to cross T(beta)" -- spend-domain
+throughout. Threshold tiers are already spend-domain by construction
+(`basis.measure` is milestone/waiver_eligible_spend, `threshold_amount`
+literally is the rupee value), but a reward-measure cap's `amount` is a
+REWARD ceiling, not a spend value. Converted via A.3's `Sbar = Cap/a`
+using the capped rule's own continuous rate -- the exact same formula
+caps.py's own overflow-spend derivation already relies on, so `flat_rate`
+was made public (was `_flat_rate`) rather than reimplemented a second
+time. This keeps every entry in the compiled list comparable on one axis,
+which the (future) repair pass needs to do its "near-miss just below /
+barely-made" comparisons meaningfully across mixed threshold/cap sources.
+
+### 31. Only the compile step is built -- the repair pass is a separate,
+later module by design, not an oversight
+
+Part E SS E.0's module layout lists `breakpoints.py` under `engine/`
+(compiled breakpoint list) and `repair.py` under `optimiser/` (the actual
+near-miss/barely-made variant generation and repair pass) as two
+DIFFERENT files in two different directories -- confirming this is meant
+to be a clean split, not an artificial one. `default_buffer` (C.0's `max
+(Rs5,000, 2% . T(beta))`) is computed and stored on every breakpoint here,
+since the repair pass will need it immediately once it exists, but the
+walk-the-list-and-generate-variants algorithm itself is out of scope for
+this module -- that's Phase 4's optimiser, not Phase 2's engine.
+
+### 32. Spend-measure caps raise here too, same posture as caps.py
+
+`compile_card_breakpoints` raises on any cap with `measure != "reward"`,
+consistent with caps.py's own scope boundary (docs/DECISIONS.md #9) --
+syn_slab's spend-measure band caps aren't ordinary reward ceilings and
+don't have a defined Sbar conversion the way a reward-measure cap does
+(there's no "reward ceiling" to convert from; the amount already is a
+spend boundary, but interpreting it as a breakpoint requires resolving
+syn_slab's fill-order mechanic first, which stays deferred).

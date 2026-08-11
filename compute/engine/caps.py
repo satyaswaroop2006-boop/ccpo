@@ -115,7 +115,7 @@ def _scope_rule_keys(cap: Cap, earning_rules: Sequence[EarningRule]) -> set[str]
     return keys
 
 
-def _flat_rate(accrual: Accrual) -> Decimal:
+def flat_rate(accrual: Accrual) -> Decimal:
     """The continuous (unfloored) rupee rate `a`/`b` of A.3's curve."""
     if accrual.type == "percentage":
         return accrual.rate
@@ -163,7 +163,7 @@ def _apply_one_cap(
             running_total = cap.amount
 
             if cap.overflow == "base_rate" and excess_reward > 0:
-                rate = _flat_rate(accruals[original.rule_key])
+                rate = flat_rate(accruals[original.rule_key])
                 excess_spend = min(excess_reward / rate, original.segment.amount)
                 if excess_spend > 0:
                     fallback_rules = [r for r in earning_rules if r.key not in pool_rule_keys]
