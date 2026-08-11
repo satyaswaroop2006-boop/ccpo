@@ -2,14 +2,16 @@
 through the full engine pipeline built so far, hand computation in each
 golden's own `_hand_computation` is the arbiter of a red test.
 
-The seed->engine adapter below (`_load_card_rules`) translates directly
-from seeds/synthetic_cards.py so goldens test the same rule data that gets
-seeded into the database. It currently handles percentage/per_unit
-accruals, category/channel/merchant_group selectors, and Stage 5's full
-reward-measure cap support (any window kind, any scope). It will still
-need extending for thresholds/benefits/surcharges as more goldens come
-online, and for spend-measure caps once syn_slab's fill-order mechanic is
-built (see docs/DECISIONS.md).
+The seed->engine adapter below (`_load_card_rules`/`_load_thresholds`)
+translates directly from seeds/synthetic_cards.py so goldens test the same
+rule data that gets seeded into the database. It currently handles
+percentage/per_unit accruals, category/channel/merchant_group selectors,
+Stage 5's full reward-measure cap support (any window kind, any scope),
+and Stage 6-7's grant-type threshold payloads. It will still need
+extending for benefits/surcharges/forex as more goldens come online (this
+golden's card has none of those), and for spend-measure caps /
+activate_rule once syn_slab's fill-order mechanic and Stage 3 activation
+support are built (see docs/DECISIONS.md).
 """
 import json
 from decimal import Decimal
@@ -17,9 +19,11 @@ from pathlib import Path
 
 from engine.accrue import Accrual, accrue_category_mode
 from engine.caps import Cap, Window, apply_caps
+from engine.costs import compute_fees
 from engine.eligibility import apply_eligibility
 from engine.match import EarningRule, Selector, match
 from engine.normalise import AssumptionsSnapshot, CategorySpend, NormalisedSpend, SpendInput, normalise
+from engine.thresholds import Payload, Threshold, ThresholdBasis, Tier, evaluate_thresholds
 from seeds.synthetic_cards import CARDS
 
 GOLDENS_DIR = Path(__file__).resolve().parent.parent / "goldens"
@@ -77,6 +81,40 @@ def _load_card_rules(card_key: str):
     return tuple(earning_rules), accruals, tuple(caps)
 
 
+def _payload_from_dict(d: dict) -> Payload:
+    return Payload(
+        type=d["type"],
+        amount=Decimal(str(d["amount"])) if "amount" in d else None,
+        currency=d.get("currency"),
+        benefit=d.get("benefit"),
+        fee=d.get("fee"),
+        quantity=d.get("quantity"),
+        window=Window(kind=d["window"]["kind"], alignment=d["window"].get("alignment")) if "window" in d else None,
+        condition=d.get("condition"),
+        rule=d.get("rule"),
+        application=d.get("application"),
+    )
+
+
+def _threshold_from_dict(d: dict) -> Threshold:
+    basis_dict = d["basis"]
+    basis = ThresholdBasis(
+        measure=basis_dict["measure"],
+        window=Window(kind=basis_dict["window"]["kind"], alignment=basis_dict["window"].get("alignment")),
+        selector_override=_selector_from_dict(basis_dict["selector_override"]) if basis_dict.get("selector_override") else None,
+    )
+    tiers = tuple(
+        Tier(tier_index=t["tier_index"], threshold_amount=Decimal(str(t["threshold_amount"])), payload=_payload_from_dict(t["payload"]))
+        for t in d["tiers"]
+    )
+    return Threshold(key=d["key"], basis=basis, tier_mode=d["tier_mode"], tiers=tiers)
+
+
+def _load_thresholds(card_key: str) -> tuple[Threshold, ...]:
+    card = next(c for c in CARDS if c["key"] == card_key)
+    return tuple(_threshold_from_dict(t) for t in card.get("thresholds", []))
+
+
 def _parse_spend_annual(spend_annual: dict) -> SpendInput:
     lines = []
     for key, amount in spend_annual.items():
@@ -108,3 +146,22 @@ def test_golden_syn_ecom_basic():
     # no estimation flag expected". cap_overflow bookkeeping flags (internal
     # to caps.py's trace) are a separate concern from this check.
     assert not any("rounding_estimated" in r.flags for r in final)
+
+    # Stages 6-7 (thresholds) + 10 (costs): waiver crossing and fees.
+    thresholds = _load_thresholds("syn_ecom")
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+
+    card = next(c for c in CARDS if c["key"] == "syn_ecom")
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)
+
+    assert fees.waived == golden["expected"]["waiver_achieved"]
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    # syn_ecom has no benefits/surcharges/forex, so NACV = gross reward -
+    # fees exactly (A.12's other terms are all zero for this card).
+    nacv_steady_state = gross_reward_value - fees.steady_fee
+    nacv_year_1 = gross_reward_value - fees.year1_fee
+    assert nacv_steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv_year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))

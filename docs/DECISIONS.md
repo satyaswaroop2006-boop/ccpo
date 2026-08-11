@@ -401,3 +401,51 @@ three-line function directly off the spec text, consistent with how
 selector_override (Stage 6-7) and per_point_fee (Stage 8) were handled --
 implement what's cheaply spec-complete, flag what's genuinely a scope
 decision (activate_rule, spend-measure caps) for sign-off instead.
+
+---
+
+## 2026-08-11 -- Stage 10 (costs.py), Part A SS A.6 / SS A.10 / SS A.11
+
+### 24. GST_RATE=0.18 is a fixed constant, not a per-card parameter
+
+C.2.10's CardRuleSet example shows a per-card `fees.gst_rate` field, but
+no card in seeds/synthetic_cards.py sets one (seed.py's INSERT into
+card_versions doesn't even have a gst_rate column), and A.6's formulas are
+written against a literal `g = 0.18`. Implemented as a fixed module
+constant. This also matches golden_syn_ecom_basic.json's own hand
+computation exactly ("joining fee 500 * 1.18 = 590"), which is now fully
+verified end-to-end (see #26).
+
+### 25. International spend is a direct parameter, not derived from segments
+
+A.10's `ForexCost(c) = m(c) . (1+g) . Sum_t x(c,intl,t)` needs to know
+which spend is international. Stage 1's category-mode grid has no
+geography dimension (same gap already logged for Stage 3's syn_travel
+"intl" earning rule, DECISIONS.md #4) -- `forex_cost()` takes
+`international_spend` as a plain caller-supplied Decimal rather than
+trying to derive it from SpendSegments, so Stage 10 doesn't need to solve
+that gap as a prerequisite. Tested against syn_travel's real
+forex_markup=0.0 (proving the zero-forex case is Rs0 regardless of
+amount, by construction) plus a hand-built non-zero-markup case.
+
+### 26. Surcharge waivers are NOT modelled in costs.py -- confirmed by C.9's
+own framing, and now verified end-to-end via the golden
+
+C.9 Example 10 (syn_fuel) is explicit: "surcharge waivers are just capped
+negative-cost rules" -- the refund is an ordinary earning rule
+(fuel_refund, capped at Rs250/month) that flows through Stages 3-5 like
+any other reward. `surcharge_cost()` therefore charges syn_fuel's flat 1%
+unconditionally; it never needs to know a waiver mechanism exists. No
+special-casing was added here, which is itself the evidence the reading is
+right -- the card's own schema already routes the offset through the
+reward pipeline instead of needing cost-side logic.
+
+Also: golden_syn_ecom_basic.json's `fee_paid`/`waiver_achieved`/
+`nacv_steady_state`/`nacv_year_1` fields -- unverifiable until this stage
+existed -- are now asserted exactly (extended `_load_card_rules`'s sibling
+`_load_thresholds` to parse the card's real waiver threshold, run Stage
+6-7, then Stage 10's `compute_fees`). syn_ecom has no benefits/surcharges/
+forex, so NACV = gross_reward - fees exactly for this card; a future
+golden with a surcharge or benefit will need those terms added at the
+test level (costs.py/benefits.py both already support them, this is
+purely about which golden exercises which terms).
