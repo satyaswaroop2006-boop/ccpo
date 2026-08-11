@@ -85,7 +85,7 @@ def _validate_cap(cap: Cap) -> None:
         raise ValueError(f"cap {cap.key!r}: unknown scope {cap.scope!r}")
 
 
-def _window_instances(window: Window) -> tuple[tuple[int, ...], ...]:
+def window_instances(window: Window) -> tuple[tuple[int, ...], ...]:
     if window.kind in ("calendar_month", "statement_cycle"):
         return tuple((m,) for m in range(1, 13))
     if window.kind == "quarter":
@@ -95,7 +95,7 @@ def _window_instances(window: Window) -> tuple[tuple[int, ...], ...]:
     raise ValueError(f"unknown window kind {window.kind!r}")
 
 
-def _window_flags(window: Window) -> tuple[str, ...]:
+def window_flags(window: Window) -> tuple[str, ...]:
     flags = []
     if window.kind == "statement_cycle":
         flags.append("cycle_approximated")
@@ -129,12 +129,12 @@ def _apply_one_cap(
     accruals: dict[str, Accrual],
 ) -> tuple[AccrualResult, ...]:
     pool_rule_keys = _scope_rule_keys(cap, earning_rules)
-    window_flags = _window_flags(cap.window)
+    flags_for_window = window_flags(cap.window)
 
     capped_reward_by_index: dict[int, Decimal] = {}
     overflow_extra: list[AccrualResult] = []
 
-    for instance_months in _window_instances(cap.window):
+    for instance_months in window_instances(cap.window):
         month_set = set(instance_months)
         indices = [i for i, r in enumerate(results) if r.rule_key in pool_rule_keys and r.segment.month in month_set]
         if not indices:
@@ -178,13 +178,13 @@ def _apply_one_cap(
                                 rule_key=fallback_winner.rule_key,
                                 segment=overflow_segment,
                                 reward=overflow_reward,
-                                flags=("cap_overflow",) + window_flags,
+                                flags=("cap_overflow",) + flags_for_window,
                             )
                         )
             # overflow == "zero": excess reward is simply discarded.
 
     new_results = [
-        replace(r, reward=capped_reward_by_index[i], flags=r.flags + tuple(f for f in window_flags if f not in r.flags))
+        replace(r, reward=capped_reward_by_index[i], flags=r.flags + tuple(f for f in flags_for_window if f not in r.flags))
         if i in capped_reward_by_index else r
         for i, r in enumerate(results)
     ]

@@ -235,3 +235,59 @@ already-estimated reward -- a real but currently theoretical interaction,
 since no in-scope fixture's capped rule is ever flagged `rounding_estimated`.
 Worth a second look if a future card's cap sits on a materially-imprecise
 ticket-approximated rule.
+
+---
+
+## 2026-08-11 -- Stage 6-7 (thresholds.py), Part C SS C.3 / SS C.4
+
+### 13. `activate_rule` payloads deferred -- confirmed with Satya
+
+C.3's payload table lists `activate_rule { rule_id, application: prospective
+| retroactive }` for accelerated-rate thresholds (syn_retro, syn_renewal).
+Firing it correctly means Stage 3 gaining a concept it doesn't have at all
+today: a rule that only becomes matchable once a threshold crosses (Stage
+3's `EarningRule` has no `requires_activation` field, and matching is
+purely per-segment/stateless -- it has no notion of "which month" or "has
+this card crossed X yet"). Prospective activation (syn_renewal's
+dining_2x: active only from the crossing month onward) and retroactive
+activation (syn_retro: the whole window re-rates once crossed, per
+highest_only tier resolution) are different re-application mechanics on
+top of that, both needing thresholds.py to reach back into Stage 3/4/5 for
+the affected months.
+
+Confirmed with Satya: today's Stage 6-7 covers only the five "grant" type
+payloads (grant_points, grant_cashback, grant_voucher, waive_fee,
+grant_entitlement) -- self-contained, no dependency on Stage 3/4/5 at all.
+`activate_rule` raises **only when a tier carrying it is actually crossed**
+(`_require_supported_payload` is checked per firing tier, not upfront for
+the whole threshold) -- an uncrossed activate_rule tier is inert and
+doesn't block evaluation of tiers that do fire. This is why
+`test_syn_renewal_uncrossed_activate_rule_tier_does_not_block_evaluation`
+passes while `test_syn_renewal_activate_rule_tier_raises_when_crossed`
+(cumulative mode: crossing the 5L grant_points tier necessarily also
+crosses the 1L activate_rule tier) correctly raises.
+
+Building activate_rule properly is its own future task and will likely
+touch match.py (adding `requires_activation`) as well as thresholds.py.
+
+### 14. `condition: "on_renewal"` carried through unfiltered -- year-mode gap
+
+C.3's payload table ties renewal-benefit milestones to `condition:
+"on_renewal"` (should only fire in renewal years, not Year 1). Nothing in
+the pipeline built so far has a year_index concept (that's C.4.2 / Stage
+11, not built) so thresholds.py can't filter on it -- it just carries
+`condition` through on the `Payload` unchanged
+(`test_on_renewal_condition_carried_through_unfiltered`). Whichever stage
+eventually assembles Year-1 vs steady-state values (Stage 11 per C.4) is
+the right place to apply this filter; thresholds.py stays year-agnostic.
+
+### 15. `caps.py`'s window helpers made public for reuse
+
+`window_instances`/`window_flags` (formerly `_window_instances`/
+`_window_flags`) are now unprefixed -- thresholds.py imports them directly
+rather than re-implementing C.2.4 window resolution a third time. Both
+Stage 5 and Stage 6-7 need identical quarter/year/anniversary/statement-
+cycle resolution, so a later-numbered stage importing an earlier one's
+shared vocabulary type is the same direction as thresholds.py importing
+`Selector` from match.py, or caps.py importing from match.py before it.
+Verified `test_caps.py`'s 18 tests still pass unchanged after the rename.
