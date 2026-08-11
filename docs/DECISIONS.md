@@ -291,3 +291,59 @@ cycle resolution, so a later-numbered stage importing an earlier one's
 shared vocabulary type is the same direction as thresholds.py importing
 `Selector` from match.py, or caps.py importing from match.py before it.
 Verified `test_caps.py`'s 18 tests still pass unchanged after the rename.
+
+---
+
+## 2026-08-11 -- Stage 8 (valuation.py), Part A SS A.7 / Part C SS C.2.9
+
+### 16. Transfer routes: ratio computed, not read from the stored field
+
+A.7's formula parenthetical is explicit -- "(for transfers: transfer_ratio
+. estimated_partner_point_value, both stored per SS44)" -- so for
+`route_type="transfer"`, the effective rupees-per-point is `transfer_ratio
+* partner_point_value`, computed fresh, never the route's own stored
+`ratio` field. The seed data's transfer route happens to also carry a
+`ratio: 1.0` that equals `transfer_ratio(1.0) * partner_point_value(1.0)`
+by construction, which could read as "just use ratio directly" -- but the
+spec names the computed form as authoritative, and treating the stored
+`ratio` as a redundant/legacy field (present for schema uniformity across
+route types, e.g. so every route row has *a* ratio-shaped column) is the
+more defensible reading if the two ever diverge. `_validate_route`
+requires `transfer_ratio`/`partner_point_value` on transfer routes
+regardless of whether `ratio` is set.
+
+### 17. Friction defaults to 1.0 flat, not type-dependent, in code
+
+A.7 suggests type-specific friction defaults (cash/voucher 1.0, portal
+0.9, transfer 0.75-0.85) but the seed data already encodes exactly that:
+portal and transfer set `friction_default` explicitly (0.9, 0.8), stmt/
+voucher omit it. So `valuation.py` just defaults any missing `friction` to
+a flat 1.0 -- the type-specific defaults live once, in the registry data,
+not duplicated as route-type branching in code. If a future currency's
+travel_portal route omits `friction_default`, it will get 1.0 (not A.7's
+suggested 0.9) until the registry sets it explicitly -- a real gap, but
+the alternative (hardcoding "portal -> 0.9" in code) would fight the
+registry-is-the-source-of-truth principle C.7 sets up.
+
+### 18. `min_points` unmet -> price at Rs0, not the best alternative route
+
+When the user's declared v_exp route can't be reached (points below
+`min_points`), rather than silently substituting a different (reachable)
+route's rate, `value_currency` prices at Rs0 and flags
+`min_points_not_met`. Silently substituting would mean showing a number
+the user never actually declared wanting, which cuts against A.7's "the
+engine prices rewards at v_exp everywhere" / "never silently price at
+v_opt" instruction -- if the user's chosen route isn't reachable this
+year, Rs0-with-a-reason is more honest than an unrequested rate swap.
+v_cons/v_opt are unaffected by this (they already exclude ineligible
+routes from their own max() search per SS8's "over {cash,voucher} routes" /
+"over all routes" wording).
+
+### 19. Flat per-currency redemption fees (A.12's `RedemptionFees(c)`) not modelled
+
+A.12's NACV formula has a `RedemptionFees(c)` line distinct from the
+per-point fee this stage implements (`per_point_fee`, scales with points
+redeemed). No route in the seed catalog carries a flat fee field, so
+there's nothing to test against; deferred until a card needs it. Likely
+lands in Stage 10 (COSTS) rather than here, since A.12 groups it with fees/
+surcharges/forex, not with the currency pipeline of A.7.
