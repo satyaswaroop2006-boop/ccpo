@@ -347,3 +347,57 @@ redeemed). No route in the seed catalog carries a flat fee field, so
 there's nothing to test against; deferred until a card needs it. Likely
 lands in Stage 10 (COSTS) rather than here, since A.12 groups it with fees/
 surcharges/forex, not with the currency pipeline of A.7.
+
+---
+
+## 2026-08-11 -- Stage 9 (benefits.py), Part A SS A.8 / SS A.9, Part C SS C.2.8
+
+### 20. Portfolio dedup computes the value ceiling, not a per-card allocation
+
+A.9's formula is `PortfolioBenefit(b) = Sum_c l(c,b) . V(b)` subject to
+`Sum_c l(c,b) <= Need(b)` and `l(c,b) <= Entitle(c,b)` -- on its face an
+allocation problem (which card's quota supplies which unit). But every
+unit is worth the same `V(b)` regardless of which card provides it, so the
+value-maximising total is always exactly `min(Need(b), Sum_c Entitle(c,b))`
+-- the specific per-card split doesn't change the value at all. A.9's own
+text confirms the split is an *optimiser* decision ("allocated to
+whichever card's quota the optimiser draws down... allocation matters when
+quotas have qualification gates" -- i.e. it matters for figuring out which
+spend to route where, a Phase 4 concern, not for the value number itself).
+`deduplicate_portfolio_benefit` therefore returns the achievable value
+ceiling, not a card-by-card breakdown -- correct today, and it's the exact
+quantity the optimiser needs as its target once it exists.
+
+### 21. Gated countable entitlement sums Stage 6-7's ThresholdEvents; ungated
+multiplies by window-instance count
+
+Two different ways `Entitle(c,b)` gets computed, both hand-tested:
+qualification-gated benefits (syn_lounge's dom_lounge) sum `quantity` from
+every matching `grant_entitlement` ThresholdEvent Stage 6-7 actually
+produced (so unqualified quarters contribute nothing); ungated benefits
+(no card in the catalog has one -- hand-built test) get a flat
+`entitlement * window_instances(entitlement_window)` (e.g. 2/month * 12 =
+24/year), reusing caps.py's window machinery for the third time now.
+
+### 22. Voucher/flat_perk kinds: utilisation and friction are caller-supplied,
+same posture as Need/V(b)
+
+`utilisation_ref`/`friction_ref` on a Benefit are registry/user pointers
+(C.2.8), not values this stage resolves -- `value_voucher_benefit` and
+`value_flat_perk_benefit` take `utilisation`/`friction` as plain
+parameters, same as Stage 1's `ticket_size` and Stage 8's route friction.
+No default is suggested anywhere in the spec for benefit-voucher friction
+specifically (A.7's cash/voucher/portal/transfer defaults are for
+*redemption routes*, a different mechanism from a milestone voucher grant,
+even though A.5 borrows the same phi notation) -- test values (0.85, 0.9)
+are illustrative only, not asserted as "the" default anywhere.
+
+### 23. `flat_perk` implemented and tested without a real fixture
+
+No card in the 12-card synthetic catalog uses `kind: "flat_perk"` (only
+syn_miles' vouchers and syn_lounge's one countable benefit exist). Built
+and tested per A.8's formula (`FV(c,b) . u(c,b)`) anyway since it's a
+three-line function directly off the spec text, consistent with how
+selector_override (Stage 6-7) and per_point_fee (Stage 8) were handled --
+implement what's cheaply spec-complete, flag what's genuinely a scope
+decision (activate_rule, spend-measure caps) for sign-off instead.
