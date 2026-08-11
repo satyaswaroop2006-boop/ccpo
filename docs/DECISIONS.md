@@ -108,3 +108,65 @@ channel. Stage 3's own tests construct `SpendSegment` directly with
 tests already used for fields Stage 1 doesn't produce. Wiring a real input
 path through Stage 1 is deferred until a card actually needs it end-to-end
 through the full pipeline (same "additive when needed" posture as #4).
+
+---
+
+## 2026-08-11 -- Stage 4 (accrue.py) + minimal caps.py, Part C SS C.2.2 / SS C.6
+
+### 6. `caps.py` built early, deliberately narrow -- confirmed with Satya
+
+`golden_syn_ecom_basic.json`'s own `purpose` field says it's a cap-binding
+golden (Master Prompt SS55 test 1) -- its expected Rs14,400 gross figure is
+only reachable after the Rs1,000/month cap on the "ecom" rule binds and
+Rs10,000/month of overflow spend re-rates at the base 1% rate. That's
+Stage 5's job, not Stage 4's, so making this golden green today meant
+building a slice of Stage 5 ahead of schedule.
+
+Satya confirmed: build a minimal `caps.py` now (just enough for this
+golden), not the full Stage 5. What's implemented:
+  - measure = "reward" only (not "spend")
+  - window = "calendar_month" only (not quarter/annual)
+  - scope = "rule" only (not "rule_group:<key>" or "card")
+  - exactly one segment per rule per month (raises otherwise)
+  - overflow "base_rate" resolved by re-running Stage 3's match with the
+    capped rule excluded, taking whichever non-stacking rule wins -- not
+    a hardcoded "base" rule lookup, so it generalises past a rule literally
+    named "base"
+
+Real Stage 5 (as its own task) needs: spend-measure caps, quarter/annual
+windows with the C.2.4 clock resolver, rule_group and card-scope caps
+(shared caps across several rules -- syn_points' actual cap_portal is
+scope="rule_group:portal_accel", which this slice does NOT support yet),
+and multi-segment months. `apply_caps`'s `_validate_cap` raises clearly on
+all of these rather than silently mishandling them.
+
+### 7. Bug found and fixed while building this: `caps.py` index-shift corruption
+
+First version of `apply_caps` mutated its `results` list in place via
+`results[idx:idx+1] = replacement` inside a loop over months, using
+indices computed once before any mutation started. Each capped month
+inserts an extra row (the overflow entry), shifting every later month's
+precomputed index by one -- so month 2 onward silently capped/read the
+WRONG list slot after month 1 was processed. Caught because the golden
+came back Rs16,800 instead of Rs14,400 (months 7-12 ended up fully
+uncapped: 1,600/mo instead of 1,200/mo).
+
+Fixed by computing every cap decision against the original, untouched
+`accrual_results` list first (a dict of index -> new reward, plus a
+separate list of overflow entries), and only building the final result
+list in one non-mutating pass at the end. Regression coverage: the golden
+test itself now exercises all 12 months, and `test_caps.py` tests the
+single-month math directly.
+
+### 8. Materiality/`ea` (ticket-size effective rate) denominator convention
+
+C.6 says the 1% materiality check is on "the rule's reward" without
+specifying which of the two candidate values (ticket-approximated vs
+unrounded) is the denominator -- they're close enough (A.2's own worked
+example: ~6.67% one way, ~6.25% the other) that it doesn't change any
+flagging decision so far, but noting the choice: implemented as
+`|approx - unrounded| / approx` (approx = the actual reported/ticket-
+approximated reward, i.e. "how far off is the number I'm showing you").
+Aggregated per rule across ALL of its bound segments in one evaluation,
+per C.6's "per-rule materiality check" wording -- not per segment, per
+category, or per month.
