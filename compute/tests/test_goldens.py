@@ -18,6 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from engine.accrue import Accrual, accrue_category_mode
+from engine.assemble import assemble_nacv
 from engine.caps import Cap, Window, apply_caps
 from engine.costs import compute_fees
 from engine.eligibility import apply_eligibility
@@ -159,9 +160,11 @@ def test_golden_syn_ecom_basic():
     assert fees.waived == golden["expected"]["waiver_achieved"]
     assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
 
-    # syn_ecom has no benefits/surcharges/forex, so NACV = gross reward -
-    # fees exactly (A.12's other terms are all zero for this card).
-    nacv_steady_state = gross_reward_value - fees.steady_fee
-    nacv_year_1 = gross_reward_value - fees.year1_fee
-    assert nacv_steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
-    assert nacv_year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    # Stage 11: final assembly. syn_ecom has no milestones/benefits/
+    # surcharges/forex, so every one of those terms is legitimately zero.
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))

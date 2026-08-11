@@ -449,3 +449,56 @@ forex, so NACV = gross_reward - fees exactly for this card; a future
 golden with a surcharge or benefit will need those terms added at the
 test level (costs.py/benefits.py both already support them, this is
 purely about which golden exercises which terms).
+
+---
+
+## 2026-08-11 -- Stage 11 (assemble.py), Part A SS A.12, Part C SS C.4.2 / SS C.10
+
+### 27. The explanation trace is a flat line-item list, not C.10's full node
+schema -- a real scope reduction, flagged here rather than asked upfront
+
+C.10 specifies a rich per-node schema: `amount`, `kind`, `card_version`,
+`rule_id`, `cap_state`, `window`, `spend_basis`, a `currency` sub-object
+(`points`/`route`/`v`/`phi`), `flags`, `source_refs`. Building that fully
+would mean plumbing far more intermediate state through every earlier
+stage than is currently exposed -- e.g. Stage 5's per-window cap_state
+(bound/unbound) isn't returned anywhere today, Stage 8's per-currency v/phi
+detail is internal to `value_currency` and not surfaced per reward line,
+and `source_refs` comes from Part D's `source_links` table, which doesn't
+exist at this in-memory engine layer at all (it's a Postgres concern).
+
+Implemented instead: `TraceLine(kind, amount, label, flags)` -- enough to
+reconstruct the total by summing and to show which named component
+contributed what, at the granularity Stage 11 actually has (gross reward,
+each milestone grant, benefit value, fee, forex, surcharge). This is a
+real reduction in fidelity versus C.10's spec, not just an implementation
+detail -- unlike other decisions in this log (which were "the spec doesn't
+pin down X, here's a defensible reading"), this is "the full spec'd thing
+is meaningfully larger than what's cheap to build today." Flagging
+explicitly: if the richer trace (cap_state, per-currency breakdown,
+source_refs) is needed soon -- e.g. for the SS37 "Why Card B" panel or
+SS74's audit requirement, both of which C.10 says render this trace
+directly -- it's a follow-up task, not a small addition.
+
+### 28. `PV` (per C.4's Stage 11 line) isn't a separate output -- it equals
+NACV for a single card
+
+C.4's Stage 11 description lists "NACV per card, PV, Year-1 and Steady-
+State variants..." -- but Part B's `PV(P,x) = Sum NACV(c|x) - lambda .
+max(|P|-1,0)` is a *portfolio* (multi-card) concept, and for a single-card
+portfolio the complexity penalty term is `max(1-1,0)=0`, so `PV({c},x) =
+NACV(c)` exactly, trivially. True portfolio PV needs the enumeration/
+allocation machinery of Part E (the optimiser, Phase 4), which doesn't
+exist yet. No separate `PV` output was added -- `NACVResult.steady_state`
+already is that number for the single-card case this engine currently
+evaluates.
+
+### 29. WelcomeValue and RedemptionFees stay deferred, now formally in the formula
+
+`assemble_nacv` accepts `welcome_value` as an optional parameter (default
+Rs0) so A.12's Year-1 formula is spec-complete even though no card in the
+12-card catalog has a welcome-bonus payload type to test non-zero against
+(C.3's payload table doesn't define one either -- welcome benefits aren't
+modelled anywhere in Part C's schema as read so far). RedemptionFees
+stays deferred exactly as already logged at Stage 8 (#19) -- nothing new
+here, just confirming Stage 11 doesn't need to solve it either.
