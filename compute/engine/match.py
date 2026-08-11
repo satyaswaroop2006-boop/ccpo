@@ -56,12 +56,16 @@ class Selector:
 class EarningRule:
     """The slice of C.2.6's EarningRule that Stage 3 needs. `accrual` and
     `caps` are Stage 4/5's concern -- callers re-look-up the full rule by
-    `key` from the card's rule set once a binding names it."""
+    `key` from the card's rule set once a binding names it.
+
+    `rule_group` doesn't affect matching at all -- Stage 5 (caps.py) reads
+    it to resolve "rule_group:<key>"-scoped caps."""
 
     key: str
     selector: Selector
     priority: int = 10
     stacks_with_base: bool = False
+    rule_group: str | None = None
 
 
 @dataclass(frozen=True)

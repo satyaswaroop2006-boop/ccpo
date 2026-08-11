@@ -170,3 +170,68 @@ approximated reward, i.e. "how far off is the number I'm showing you").
 Aggregated per rule across ALL of its bound segments in one evaluation,
 per C.6's "per-rule materiality check" wording -- not per segment, per
 category, or per month.
+
+---
+
+## 2026-08-11 -- Full Stage 5 (caps.py), Part C SS C.2.3 / SS C.2.4
+
+### 9. Spend-measure caps (syn_slab) stay deferred -- confirmed with Satya
+
+Went into this task planning to build all of C.2.3, then found syn_slab's
+three earning rules all carry an *empty* selector (`{}`, matches
+everything) at different priorities -- under Stage 3's ordinary winner-
+takes-all conflict resolution, only the top-priority rule (slab1) could
+ever bind; slab2 and slab3 would never fire. The seed's own comment says
+this needs "fill-order binaries," which Part B SS B.5 / Part E frame as an
+*optimiser* concern (Phase 4) -- the exact evaluator's equivalent isn't
+specified in Part C's Stage 5 description. It's a genuinely different
+mechanic (ordered band-filling across a rule group) from a reward ceiling,
+even though it reuses the Cap schema object for its band-width bookkeeping.
+
+Confirmed with Satya: today's Stage 5 covers the "classic" cap mechanics
+(reward-measure, every window kind, every scope kind, both overflow modes)
+that syn_ecom/syn_points/syn_fuel/syn_upi all use. `measure="spend"` still
+raises. syn_slab's fill-order mechanic is its own future task, and will
+likely also need a Stage 3 extension (or a pre-Stage-3 special case) since
+its rules can't resolve correctly under today's matching semantics as-is.
+
+### 10. Quarter/anniversary alignment approximated as calendar alignment
+
+C.2.4 documents `{"kind": "quarter", "alignment": "anniversary"}` as
+distinct from calendar alignment, and anniversary-year windows generally.
+Per A.17 simplification #2 (already adopted engine-wide: "anniversary-year
+milestone clocks aligned to the modelling year"), Stage 5 resolves BOTH
+anniversary-aligned quarters and anniversary_year caps to the same month
+buckets as their calendar-aligned counterparts, and stamps the result with
+an `anniversary_approximated` flag (parallel to `cycle_approximated` for
+statement_cycle) so the approximation is visible in the trace rather than
+silent. True anniversary alignment (using the user's actual card
+anniversary month, wallet mode) needs `card_anniversary_month` threaded
+through from the user profile -- not built anywhere in the pipeline yet,
+deferred until wallet mode lands.
+
+### 11. Multi-category pooled cap windows raise rather than guess
+
+A `rule_group`- or `card`-scoped cap could in principle pool segments
+across several different categories/channels within one window instance
+(e.g. two different rules in the same group, each targeting a different
+category). None of the four in-scope cards' caps do this in practice
+(syn_points' cap_portal is rule_group-scoped but only one rule -- portal_
+bonus -- is actually tagged into that group). `apply_caps` raises rather
+than picking an attribution scheme (proportional? chronological across
+categories? per-category sub-caps?) with no real fixture to validate
+against. `test_multi_category_pooled_window_raises` covers this.
+
+### 12. Overflow-spend back-derivation inherits category mode's approximation
+
+For `overflow: "base_rate"`, the excess spend past the cap is back-derived
+as `excess_reward / flat_rate` (A.3's continuous rate `a`, not Stage 4's
+ticket-approximated `ea`). When `ea == a` exactly (true for every in-scope
+card's cap-bearing rule at the ticket sizes exercised so far -- percentage
+rules with clean paisa amounts), this is exact. If a future capped rule's
+`ea` diverges from `a` enough to trip the C.6 materiality flag, the back-
+derived excess spend would be a slightly-off estimate layered on top of an
+already-estimated reward -- a real but currently theoretical interaction,
+since no in-scope fixture's capped rule is ever flagged `rounding_estimated`.
+Worth a second look if a future card's cap sits on a materially-imprecise
+ticket-approximated rule.

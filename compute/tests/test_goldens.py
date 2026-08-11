@@ -2,20 +2,21 @@
 through the full engine pipeline built so far, hand computation in each
 golden's own `_hand_computation` is the arbiter of a red test.
 
-The seed->engine adapter below (`_load_card_rules`) is intentionally
-narrow: it handles exactly what golden_syn_ecom_basic.json's card
-(percentage accruals, category/channel selectors, a single reward-measure/
-calendar-month/rule-scope cap) needs, translating directly from
-seeds/synthetic_cards.py so the golden tests the same rule data that gets
-seeded into the database. It will need extending (per_unit accruals,
-thresholds, benefits, ...) as more goldens come online.
+The seed->engine adapter below (`_load_card_rules`) translates directly
+from seeds/synthetic_cards.py so goldens test the same rule data that gets
+seeded into the database. It currently handles percentage/per_unit
+accruals, category/channel/merchant_group selectors, and Stage 5's full
+reward-measure cap support (any window kind, any scope). It will still
+need extending for thresholds/benefits/surcharges as more goldens come
+online, and for spend-measure caps once syn_slab's fill-order mechanic is
+built (see docs/DECISIONS.md).
 """
 import json
 from decimal import Decimal
 from pathlib import Path
 
 from engine.accrue import Accrual, accrue_category_mode
-from engine.caps import Cap, apply_caps
+from engine.caps import Cap, Window, apply_caps
 from engine.eligibility import apply_eligibility
 from engine.match import EarningRule, Selector, match
 from engine.normalise import AssumptionsSnapshot, CategorySpend, NormalisedSpend, SpendInput, normalise
@@ -57,6 +58,7 @@ def _load_card_rules(card_key: str):
         earning_rules.append(EarningRule(
             key=er["key"], selector=selector,
             priority=er.get("priority", 10), stacks_with_base=er.get("stacks_with_base", False),
+            rule_group=er.get("rule_group"),
         ))
         accruals[er["key"]] = _accrual_from_dict(er["accrual"])
 
@@ -65,9 +67,10 @@ def _load_card_rules(card_key: str):
     for er in card["earning_rules"]:
         for cap_key in er.get("caps", []):
             cd = cap_defs[cap_key]
+            window = Window(kind=cd["window_def"]["kind"], alignment=cd["window_def"].get("alignment"))
             caps.append(Cap(
                 key=cd["key"], rule_key=er["key"], measure=cd["measure"],
-                amount=Decimal(str(cd["amount"])), window=cd["window_def"]["kind"],
+                amount=Decimal(str(cd["amount"])), window=window,
                 scope=cd["scope"], overflow=cd["overflow"],
             ))
 
