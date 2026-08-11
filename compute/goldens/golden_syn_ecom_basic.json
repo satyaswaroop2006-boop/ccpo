@@ -1,0 +1,32 @@
+{
+  "id": "golden_syn_ecom_basic",
+  "purpose": "Master-prompt §55 test 1 (cap binding) + waiver, on syn_ecom. TEMPLATE golden: every golden carries its full hand computation in _hand_computation so a red test is arbitrated by arithmetic, not by whoever edited last.",
+  "card": "syn_ecom",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "note": "percentage cashback; ticket-size rounding immaterial at these rates (C.6 — no estimation flag expected)"
+  },
+  "spend_annual": {
+    "ecommerce/online": 360000,
+    "grocery": 120000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Monthly ecom spend 30,000. Accelerated 5% ⇒ 1,500 > cap 1,000/mo.",
+    "Cap binds at 20,000 spend; overflow=base_rate ⇒ remaining 10,000 × 1% = 100.",
+    "Ecom monthly = 1,000 + 100 = 1,100. Grocery 10,000 × 1% = 100.",
+    "Monthly total 1,200 ⇒ annual gross rewards 14,400 (cashback_inr, v=1).",
+    "Waiver-eligible spend 480,000 ≥ 100,000 ⇒ annual fee 500 waived; GST none charged.",
+    "Steady-state NACV = 14,400 − 0 = 14,400.",
+    "Year-1: joining fee 500 × 1.18 = 590 ⇒ 14,400 − 590 = 13,810."
+  ],
+  "expected": {
+    "gross_reward_value": 14400.00,
+    "fee_paid": 0.00,
+    "waiver_achieved": true,
+    "nacv_steady_state": 14400.00,
+    "nacv_year_1": 13810.00,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}
