@@ -6,7 +6,7 @@ values are hand-computed constants (CLAUDE.md rule 1).
 """
 from decimal import Decimal
 
-from engine.costs import Surcharge, compute_fees, forex_cost, surcharge_cost
+from engine.costs import Surcharge, compute_fees, forex_cost, international_spend_total, surcharge_cost
 from engine.match import Selector
 from engine.normalise import SpendSegment
 from engine.thresholds import Payload, ThresholdEvent
@@ -68,6 +68,20 @@ def test_nonzero_forex_markup_hand_computed():
     # hand-built: 3.5% markup (the seed default for non-zero-forex cards),
     # Rs 1,00,000 international spend -> 0.035 * 1.18 * 100000 = 4,130.00
     assert forex_cost(Decimal("100000"), forex_markup=Decimal("0.035")) == Decimal("4130.000")
+
+
+def test_international_spend_total_sums_only_international_segments():
+    segments = [
+        SpendSegment(category="hotels_domestic", channel=None, month=1, amount=Decimal("50000"), ticket_size=Decimal("9000")),  # domestic (default)
+        SpendSegment(category="international_flights", channel=None, month=2, amount=Decimal("30000"), ticket_size=Decimal("35000"), geography="international"),
+        SpendSegment(category="international_flights", channel=None, month=3, amount=Decimal("20000"), ticket_size=Decimal("35000"), geography="international"),
+    ]
+    assert international_spend_total(segments) == Decimal("50000")
+
+
+def test_international_spend_total_zero_when_all_domestic():
+    segments = [SpendSegment(category="grocery", channel=None, month=1, amount=Decimal("10000"), ticket_size=Decimal("700"))]
+    assert international_spend_total(segments) == Decimal("0")
 
 
 # ---------------------------------------------------------------------------

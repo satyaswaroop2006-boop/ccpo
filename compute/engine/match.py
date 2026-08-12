@@ -23,11 +23,16 @@ rule can't accidentally win a segment. Stage 6-7 (thresholds.py) is the
 only caller that ever passes a non-empty `active_rule_keys`, once a
 threshold crossing says a specific rule is active for specific months.
 
-Selector matching covers the fields the grid can carry today: category,
-channel, merchant_group. Other C.2.1 fields (mcc, networks, geography,
-transaction amount, date range) are rejected rather than silently ignored,
-same posture as Stage 2 -- see docs/DECISIONS.md for the resulting gap
-(syn_travel's geography-scoped rule isn't matchable yet).
+Selector matching covers category, channel, merchant_group, and geography
+(domestic/international/all -- syn_travel's "intl" rule). Other C.2.1
+fields (mcc, networks, transaction amount, date range) are still rejected
+rather than silently ignored, same posture as Stage 2.
+
+`selector_matches` is the canonical implementation -- caps.py, thresholds.py,
+and costs.py all import it directly rather than keeping their own copies
+(they all operate on this module's `Selector` type). eligibility.py is the
+one exception: it has its own `ExclusionSelector` type from before this
+consolidation, so it keeps a parallel implementation.
 
 `tier_mode="incremental"` rules (syn_slab's fill-order bands, A.3's convex-
 PWL case) are excluded from ordinary matching UNCONDITIONALLY -- there is
@@ -50,7 +55,7 @@ _ALL_SELECTOR_FIELDS = (
     "categories", "channels", "merchant_groups", "merchants", "mcc_include",
     "mcc_exclude", "networks", "geography", "txn_min", "txn_max", "date_from", "date_to",
 )
-_SUPPORTED_SELECTOR_FIELDS = frozenset({"categories", "channels", "merchant_groups"})
+_SUPPORTED_SELECTOR_FIELDS = frozenset({"categories", "channels", "merchant_groups", "geography"})
 _UNSUPPORTED_SELECTOR_FIELDS = tuple(f for f in _ALL_SELECTOR_FIELDS if f not in _SUPPORTED_SELECTOR_FIELDS)
 
 
@@ -111,12 +116,14 @@ def _validate_rule(rule: EarningRule) -> None:
         )
 
 
-def _selector_matches(selector: Selector, segment: SpendSegment) -> bool:
+def selector_matches(selector: Selector, segment: SpendSegment) -> bool:
     if selector.categories is not None and segment.category not in selector.categories:
         return False
     if selector.channels is not None and segment.channel not in selector.channels:
         return False
     if selector.merchant_groups is not None and segment.merchant_group not in selector.merchant_groups:
+        return False
+    if selector.geography is not None and selector.geography != "all" and segment.geography != selector.geography:
         return False
     return True
 
@@ -151,7 +158,7 @@ def match_segment(
         r for r in earning_rules
         if r.tier_mode != "incremental" and (not r.requires_activation or r.key in active_rule_keys)
     ]
-    matching = [r for r in eligible if _selector_matches(r.selector, segment)]
+    matching = [r for r in eligible if selector_matches(r.selector, segment)]
     non_stacking = [r for r in matching if not r.stacks_with_base]
     stacking = [r for r in matching if r.stacks_with_base]
 

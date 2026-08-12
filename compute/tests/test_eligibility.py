@@ -188,3 +188,14 @@ def test_unsupported_selector_field_raises():
     spend = NormalisedSpend(segments=tuple(_flat_year("fuel", None, "1000")))
     with pytest.raises(ValueError, match="cannot be matched against"):
         apply_eligibility(spend, (bad,))
+
+
+def test_geography_exclusion_matches_only_that_geography():
+    domestic_seg = SpendSegment(category="travel", channel=None, month=1, amount=Decimal("1000"), ticket_size=Decimal("1000"), geography="domestic")
+    intl_seg = SpendSegment(category="travel", channel=None, month=1, amount=Decimal("1000"), ticket_size=Decimal("1000"), geography="international")
+    spend = NormalisedSpend(segments=(domestic_seg, intl_seg))
+    excl = Exclusion(key="no_intl_rewards", selector=ExclusionSelector(geography="international"), excluded_from=("rewards",))
+
+    result = apply_eligibility(spend, (excl,))
+    assert domestic_seg in result.reward
+    assert intl_seg not in result.reward

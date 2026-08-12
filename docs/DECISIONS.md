@@ -91,6 +91,9 @@ Phase 5 ingestion. Fix is additive when it's needed: give `CategorySpend`
 can drop `geography` from their unsupported-field lists. Flagging now so
 it's on the record before it becomes a blocker.
 
+**RESOLVED 2026-08-12** -- see entries #51-54 below. `golden_syn_travel_forex.json`
+now exercises the "intl" rule end-to-end.
+
 ### 5. `SpendSegment.merchant_group` -- new field, Stage 1 doesn't populate it yet
 
 Stage 3 needs to match `merchant_groups` selectors (syn_points' portal
@@ -427,6 +430,13 @@ trying to derive it from SpendSegments, so Stage 10 doesn't need to solve
 that gap as a prerequisite. Tested against syn_travel's real
 forex_markup=0.0 (proving the zero-forex case is Rs0 regardless of
 amount, by construction) plus a hand-built non-zero-markup case.
+
+**UPDATE 2026-08-12**: the geography gap that motivated this is now
+closed (#4, #51-54). `forex_cost()` itself is unchanged (still a pure
+formula over a plain Decimal, deliberately -- see #52), but a new
+`international_spend_total(segments)` now derives that Decimal from
+segments via `SpendSegment.geography`, so callers no longer have to
+compute it by hand. `golden_syn_travel_forex.json` uses this end-to-end.
 
 ### 26. Surcharge waivers are NOT modelled in costs.py -- confirmed by C.9's
 own framing, and now verified end-to-end via the golden
@@ -825,3 +835,88 @@ margin once grocery's Rs300 is added), and a waiver threshold. The
 resulting NACV (Rs852 steady-state) is a realistic illustration of A.11's
 point that a fuel card's surcharge can eat most of its own reward value --
 not smoothed into a "nicer" number for the golden's sake.
+
+---
+
+## 2026-08-12 -- Geography-aware selectors (Part C SS C.2.1, Part A SS A.10),
+resolving #4, wire golden_syn_travel_forex.json
+
+Confirmed with Satya: close the geography deferral properly rather than
+work around it again. Full feature, not a golden-specific patch.
+
+### 51. `SpendSegment.geography` defaults to "domestic", not `None`
+
+Unlike `channel` (`None` = genuinely unspecified, resolved later by a
+category->channel mapping) geography isn't optional in reality -- every
+real transaction happened domestically or internationally, no
+"unspecified" state exists. `CategorySpend.geography: str = "domestic"`
+threads straight onto each `SpendSegment` it produces; UPI-decomposed
+segments stay domestic unconditionally (UPI has no international rails,
+never needed a parameter). `normalise()` validates against
+`VALID_GEOGRAPHY = {"domestic", "international"}`, rejecting anything else
+outright rather than defaulting silently.
+
+### 52. `selector_matches` consolidated into match.py, reused by three
+other modules; eligibility.py kept separate (different type)
+
+Adding geography meant touching every module with its own selector-
+matching copy. Rather than editing four near-identical functions in
+parallel (and risking drift), made match.py's `_selector_matches` public
+(`selector_matches`) and had caps.py/thresholds.py/costs.py import it
+directly, deleting their own copies -- all three already operated on
+match.py's `Selector` type, so this was a straight substitution, not a
+type-unification exercise. eligibility.py's `ExclusionSelector` predates
+match.py and is a genuinely different dataclass, so it keeps its own
+parallel implementation (now also updated for geography + merchant_group,
+see #53) rather than forcing a type merge that wasn't asked for.
+
+`geography="all"` matches every segment regardless of its own geography
+(C.2.1's explicit third value, distinct from leaving the field `None`,
+though both are unrestricted in effect) -- tested directly
+(`test_geography_all_matches_every_segment`).
+
+`costs.py::forex_cost` keeps its existing plain-Decimal signature (a pure
+formula, like `accrue_transaction`) rather than being changed to take
+segments directly the way `surcharge_cost` does -- a new
+`international_spend_total(segments)` derives the Decimal from segments
+separately, composed by the caller. Preserves every existing
+`forex_cost()` call site and test unchanged.
+
+### 53. Bug found while wiring the golden: eligibility.py's ExclusionSelector
+was also missing merchant_group matching, unrelated to geography
+
+While touching eligibility.py for geography, found `merchant_groups` had
+been sitting in `_UNSUPPORTED_SELECTOR_FIELDS` this whole time even though
+match.py's `Selector` (and every card's actual exclusions) treat it as a
+normal supported field -- no current exclusion fixture uses
+`merchant_groups`, so nothing ever exercised the gap. Fixed alongside
+geography since both needed the same `_selector_matches` edit in
+eligibility.py; not scope creep, just noticed while already there.
+
+### 54. Bug found and fixed: the GOLDEN ADAPTER's `_selector_from_dict`
+never read `geography` from the raw seed dict at all
+
+The engine-level fix (match.py, #51-52) was correct on its own, but
+`golden_syn_travel_forex.json` still failed on the first run:
+`domestic_rule_keys` came back `{"intl"}` instead of `{"base"}` --
+domestic grocery was binding to the international-only rule. Cause:
+`test_goldens.py::_selector_from_dict` only ever read `categories`/
+`channels`/`merchant_groups` from the raw dict; `geography` was silently
+dropped, so the "intl" rule's `Selector` had `geography=None` (no
+restriction at all) and matched everything, and being higher-priority
+than base, won universally. Fixed by adding the missing `geography` read
+(and, for consistency, to `_exclusion_selector_from_dict` too, though no
+current exclusion needs it). A good illustration of why the golden is
+worth building even when the underlying engine change already has its own
+unit tests -- the adapter is a second, independent translation layer with
+its own bugs to catch.
+
+`golden_syn_travel_forex.json`: Rs15,000/mo domestic grocery (base, 1pt/
+Rs100) + Rs10,000/mo international_flights (intl wins over base, 2pt/
+Rs100, REPLACING not stacking) -> 4,200pts/yr -> Rs1,890 via the portal
+route. Forex cost Rs0 (this card's own zero markup) vs a hand-computed
+Rs4,956 contrast at the seed's default 3.5% markup on the identical spend
+(asserted in the test, not part of this card's NACV). Fee waived
+(Rs3,00,000 spend past the Rs2,50,000 threshold), but the joining fee
+still applies in Year-1 regardless -> NACV steady-state Rs1,890, Year-1
+-Rs1,650, 3yr Rs2,130. 168/168 tests total (7th golden).

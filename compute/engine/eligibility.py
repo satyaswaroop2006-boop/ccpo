@@ -8,10 +8,17 @@ pipeline (Stage 3 onward) reads from.
 
 Selector matching implements C.2.1's semantics (match if every non-null
 field matches; OR within a list) for the fields Stage 1's category-mode
-grid actually carries: category and channel. Any exclusion selector naming
-a field the grid doesn't carry (merchant, mcc, geography, transaction
-amount, date) is rejected rather than silently ignored -- category-mode
-eligibility has no data to evaluate those fields against.
+grid actually carries: category, channel, merchant_group, and geography.
+Any exclusion selector naming a field the grid doesn't carry (mcc,
+networks, transaction amount, date) is rejected rather than silently
+ignored -- category-mode eligibility has no data to evaluate those fields
+against.
+
+`ExclusionSelector` stays a separate type from match.py's `Selector`
+(predates that module), so its matching logic is a parallel implementation
+rather than a shared import -- match.py's `selector_matches` is what
+caps.py/thresholds.py/costs.py all reuse instead of keeping their own
+copies, since those three already operate on match.py's `Selector` type.
 """
 from __future__ import annotations
 
@@ -24,11 +31,11 @@ from engine.normalise import NormalisedSpend, SpendSegment
 VALID_EXCLUDED_FROM = frozenset({"rewards", "milestones", "fee_waiver"})
 _SCOPE_TO_VIEW = {"rewards": "reward", "milestones": "milestone", "fee_waiver": "waiver"}
 
-# Selector fields the category-mode grid (category, channel, month, amount)
-# cannot evaluate -- present in C.2.1 but not yet meaningful at Stage 2.
+# Selector fields the category-mode grid cannot evaluate -- present in
+# C.2.1 but not yet meaningful at Stage 2.
 _UNSUPPORTED_SELECTOR_FIELDS = (
-    "merchants", "merchant_groups", "mcc_include", "mcc_exclude",
-    "networks", "geography", "txn_min", "txn_max", "date_from", "date_to",
+    "merchants", "mcc_include", "mcc_exclude",
+    "networks", "txn_min", "txn_max", "date_from", "date_to",
 )
 
 
@@ -88,6 +95,10 @@ def _selector_matches(selector: ExclusionSelector, segment: SpendSegment) -> boo
     if selector.categories is not None and segment.category not in selector.categories:
         return False
     if selector.channels is not None and segment.channel not in selector.channels:
+        return False
+    if selector.merchant_groups is not None and segment.merchant_group not in selector.merchant_groups:
+        return False
+    if selector.geography is not None and selector.geography != "all" and segment.geography != selector.geography:
         return False
     return True
 

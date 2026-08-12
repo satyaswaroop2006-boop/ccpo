@@ -8,12 +8,13 @@ Three independent cost lines, each a direct transcription of its formula:
     Year1Fee(c)  = (F_join + F_annual . (1-w)) . (1+g)
   GST sits inside the waiver bracket -- a waived fee is never grossed up.
 
-  Forex (A.10): ForexCost(c) = m(c) . (1+g) . international_spend. Stage
-  1's category-mode grid has no geography dimension yet (the same gap
-  noted for Stage 3's syn_travel "intl" rule -- docs/DECISIONS.md #4), so
-  international_spend is a direct caller-supplied parameter here, not
-  derived from segments. syn_travel's forex_markup=0 (zero-forex card)
-  makes this Rs0 regardless of the amount, by construction.
+  Forex (A.10): ForexCost(c) = m(c) . (1+g) . international_spend.
+  `forex_cost` takes the international spend amount as a plain Decimal
+  (a pure formula, like accrue_transaction); `international_spend_total`
+  derives that amount from segments via SpendSegment.geography (Stage 1),
+  the same pattern surcharge_cost already uses for its own selector-
+  matched spend. syn_travel's forex_markup=0 (zero-forex card) makes this
+  Rs0 regardless of the amount, by construction.
 
   Surcharges (A.11): SurchargeCost(c) = Sum over each surcharge rule's
   selector-matched spend, rate . (1+gst_on_surcharge). No conflict
@@ -35,21 +36,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Sequence
 
-from engine.match import Selector
+from engine.match import Selector, selector_matches
 from engine.normalise import SpendSegment
 from engine.thresholds import ThresholdEvent
 
 GST_RATE = Decimal("0.18")
-
-
-def _selector_matches(selector: Selector, segment: SpendSegment) -> bool:
-    if selector.categories is not None and segment.category not in selector.categories:
-        return False
-    if selector.channels is not None and segment.channel not in selector.channels:
-        return False
-    if selector.merchant_groups is not None and segment.merchant_group not in selector.merchant_groups:
-        return False
-    return True
 
 
 @dataclass(frozen=True)
@@ -84,11 +75,15 @@ def forex_cost(international_spend: Decimal, forex_markup: Decimal) -> Decimal:
     return forex_markup * (1 + GST_RATE) * international_spend
 
 
+def international_spend_total(segments: Sequence[SpendSegment]) -> Decimal:
+    return sum((s.amount for s in segments if s.geography == "international"), Decimal("0"))
+
+
 def surcharge_cost(segments: Sequence[SpendSegment], surcharges: Sequence[Surcharge]) -> Decimal:
     total = Decimal("0")
     for surcharge in surcharges:
         matching_spend = sum(
-            (s.amount for s in segments if _selector_matches(surcharge.selector, s)), Decimal("0")
+            (s.amount for s in segments if selector_matches(surcharge.selector, s)), Decimal("0")
         )
         total += surcharge.rate * (1 + surcharge.gst_on_surcharge) * matching_spend
     return total

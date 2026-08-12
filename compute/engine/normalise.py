@@ -8,6 +8,16 @@ Stage 4's category-mode rounding maths, Part A §A.2).
 Money is Decimal throughout and every allocation reconciles exactly to its
 input total (paisa-level residual pushed onto one slot) -- no rupee is ever
 created or lost by rounding (CLAUDE.md determinism rule).
+
+Geography (C.2.1's `domestic | international | all` selector dimension) is
+a definite fact about a segment, unlike channel -- every real transaction
+genuinely happened one way or the other, there's no "unspecified" state to
+carry forward. `CategorySpend.geography` defaults to "domestic" (the
+overwhelming majority of a typical user's spend) and is threaded straight
+onto each `SpendSegment` it produces; UPI-decomposed segments are always
+domestic (UPI has no international rails). Matching against a rule's
+`geography` selector is Stage 3/2/6-7/5's concern (`match.py::
+selector_matches`), not this stage's.
 """
 from __future__ import annotations
 
@@ -16,6 +26,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 MONEY_QUANT = Decimal("0.01")
 MONTHS: tuple[int, ...] = tuple(range(1, 13))
+VALID_GEOGRAPHY = frozenset({"domestic", "international"})
 
 # C.7 default average tickets, Rs (registry defaults -- overridable via the
 # assumptions snapshot). Transcribed verbatim from the Part C table.
@@ -68,6 +79,7 @@ class CategorySpend:
     annual_amount: Decimal
     channel: str | None = None  # None = unspecified/general; resolved at Stage 3 (match)
     seasonality: tuple[Decimal, ...] | None = None  # 12 weights summing to 1; None = uniform
+    geography: str = "domestic"  # "domestic" | "international"
 
 
 @dataclass(frozen=True)
@@ -92,6 +104,7 @@ class SpendSegment:
     amount: Decimal  # Rs, exact
     ticket_size: Decimal  # Rs, from the assumptions snapshot
     merchant_group: str | None = None  # set when the user can distinguish spend by merchant group
+    geography: str = "domestic"  # "domestic" | "international"
     flags: tuple[str, ...] = ()
 
 
@@ -155,6 +168,8 @@ def normalise(spend_input: SpendInput, assumptions: AssumptionsSnapshot) -> Norm
     segments: list[SpendSegment] = []
 
     for line in spend_input.category_spend:
+        if line.geography not in VALID_GEOGRAPHY:
+            raise ValueError(f"category {line.category!r}: unknown geography {line.geography!r}; valid values are {sorted(VALID_GEOGRAPHY)}")
         ticket_size = _ticket_size(line.category, assumptions)
         if line.seasonality is None:
             monthly_amounts = _uniform_monthly_split(line.annual_amount)
@@ -169,6 +184,7 @@ def normalise(spend_input: SpendInput, assumptions: AssumptionsSnapshot) -> Norm
                     month=month,
                     amount=amount,
                     ticket_size=ticket_size,
+                    geography=line.geography,
                 )
             )
 

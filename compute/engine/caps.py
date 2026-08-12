@@ -44,7 +44,7 @@ from decimal import Decimal
 from typing import Sequence
 
 from engine.accrue import Accrual, AccrualResult, accrue_transaction
-from engine.match import EarningRule, Selector, match_segment
+from engine.match import EarningRule, match_segment, selector_matches
 from engine.normalise import SpendSegment
 
 VALID_MEASURE = frozenset({"reward"})
@@ -216,16 +216,6 @@ def apply_caps(
 # Incremental bands (A.3's convex-PWL case; C.9 Example 7, syn_slab)
 # ---------------------------------------------------------------------------
 
-def _selector_matches(selector: Selector, segment: SpendSegment) -> bool:
-    if selector.categories is not None and segment.category not in selector.categories:
-        return False
-    if selector.channels is not None and segment.channel not in selector.channels:
-        return False
-    if selector.merchant_groups is not None and segment.merchant_group not in selector.merchant_groups:
-        return False
-    return True
-
-
 def _validate_incremental_cap(cap: Cap) -> None:
     if cap.measure != "spend":
         raise ValueError(f"cap {cap.key!r}: incremental bands need measure='spend', got {cap.measure!r}")
@@ -278,7 +268,7 @@ def apply_incremental_bands(
     window = next(iter(capped_windows))
 
     ordered_rules = sorted(band_rules, key=lambda r: r.priority, reverse=True)
-    matching_segments = [s for s in reward_segments if _selector_matches(shared_selector, s)]
+    matching_segments = [s for s in reward_segments if selector_matches(shared_selector, s)]
 
     results: list[AccrualResult] = []
     for instance_months in window_instances(window):

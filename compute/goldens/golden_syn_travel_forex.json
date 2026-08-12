@@ -1,0 +1,36 @@
+{
+  "id": "golden_syn_travel_forex",
+  "purpose": "C.9 Example 8 (zero-forex travel card): geography selector matching (the 2x international earning rule wins over base on international spend, replacing it -- not stacking), Stage 10's forex cost being genuinely Rs0 on a zero-forex card regardless of the amount, and a waiver threshold.",
+  "card": "syn_travel",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "primary_route": { "synth_points": "portal" },
+    "note": "Grocery ticket 700 and international_flights ticket 35,000 are both exact multiples of Rs100 at 1pt/2pt-per-Rs100 -- zero floor loss, no rounding_estimated flag expected. No exclusions on this card, so waiver-eligible spend is simply all spend."
+  },
+  "spend_annual": {
+    "grocery": 180000,
+    "international_flights@international": 120000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Stage 3 (match): domestic grocery matches only base (categories={} matches everything, but the intl rule requires geography=international so it never sees domestic spend). International_flights spend matches BOTH base and intl -- intl wins (priority 100 > 10), REPLACING base for those segments (not stacking, intl doesn't set stacks_with_base).",
+    "Stage 4 (accrue), monthly: grocery (base, Rs15,000 @ ticket 700, 1pt/Rs100) -> floor(700/100)=7, 7pts/ticket, ea=7/700=0.01 exact -> 0.01*15,000=150pts. international_flights (intl, Rs10,000 @ ticket 35,000, 2pt/Rs100) -> floor(35000/100)=350, 700pts/ticket, ea=700/35000=0.02 exact -> 0.02*10,000=200pts.",
+    "Annual gross reward = (150+200)*12 = 4,200 pts (no caps on this card). Valued at the declared primary route 'portal': ratio 0.5 * friction 0.9 = 0.45/pt. GR = 4,200*0.45 = Rs1,890.",
+    "Stage 10 (forex): international spend total = Rs1,20,000 (the international_flights line). forex_markup=0.0 (this is the zero-forex card) -> ForexCost = 0.0*1.18*1,20,000 = Rs0, regardless of the amount, by construction. (Contrast: at the seed's DEFAULT 3.5% markup, the same Rs1,20,000 would cost 0.035*1.18*1,20,000 = Rs4,956 -- shown in the test, not part of this card's own NACV.)",
+    "Stage 6-7 (waiver): waiver-eligible spend = all spend (no exclusions) = 1,80,000+1,20,000 = Rs3,00,000 >= Rs2,50,000 -> fee waived. Steady fee = Rs0. Year-1 fee = (joining 3,000 + annual 0) * 1.18 = Rs3,540 (the joining fee is charged in Year-1 regardless of the annual-fee waiver).",
+    "NACV steady-state = 1,890 (GR) - 0 (forex) - 0 (fee) = Rs1,890.",
+    "NACV Year-1 = 1,890 - 0 - 3,540 = -Rs1,650.",
+    "3-year cumulative = -1,650 + 2*1,890 = Rs2,130."
+  ],
+  "expected": {
+    "gross_reward_value": 1890.00,
+    "forex_cost": 0.00,
+    "waiver_achieved": true,
+    "fee_paid": 0.00,
+    "nacv_steady_state": 1890.00,
+    "nacv_year_1": -1650.00,
+    "nacv_3yr": 2130.00,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}

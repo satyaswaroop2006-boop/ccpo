@@ -169,6 +169,23 @@ def test_tie_on_priority_and_specificity_uses_publication_order_and_warns():
 
 
 def test_unsupported_selector_field_raises():
-    bad_rule = EarningRule(key="bad", selector=Selector(geography="international"), priority=10)
+    bad_rule = EarningRule(key="bad", selector=Selector(networks=("rupay",)), priority=10)
     with pytest.raises(ValueError, match="cannot be matched against"):
         match_segment(_segment("travel"), (bad_rule,))
+
+
+def test_geography_selector_matches_segments_own_geography():
+    domestic_only = EarningRule(key="dom", selector=Selector(geography="domestic"), priority=10)
+    intl_only = EarningRule(key="intl", selector=Selector(geography="international"), priority=10)
+
+    domestic_segment = _segment("travel")  # SpendSegment default geography="domestic"
+    bindings = match_segment(domestic_segment, (domestic_only, intl_only))
+    assert {b.rule_key for b in bindings} == {"dom"}
+
+
+def test_geography_all_matches_every_segment():
+    from engine.normalise import SpendSegment
+    international_segment = SpendSegment(category="travel", channel=None, month=1, amount=Decimal("1000"), ticket_size=Decimal("1000"), geography="international")
+    any_geo = EarningRule(key="any", selector=Selector(geography="all"), priority=10)
+    bindings = match_segment(international_segment, (any_geo,))
+    assert {b.rule_key for b in bindings} == {"any"}

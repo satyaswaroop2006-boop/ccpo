@@ -62,7 +62,7 @@ from typing import Sequence
 
 from engine.accrue import Accrual, AccrualResult, accrue_category_mode
 from engine.caps import Window, window_flags, window_instances
-from engine.match import EarningRule, RuleBinding, Selector, match_segment
+from engine.match import EarningRule, RuleBinding, Selector, match_segment, selector_matches
 from engine.normalise import SpendSegment
 
 VALID_MEASURE = frozenset({"milestone_eligible_spend", "waiver_eligible_spend"})
@@ -72,15 +72,6 @@ SUPPORTED_PAYLOAD_TYPES = frozenset(
     {"grant_points", "grant_cashback", "grant_voucher", "waive_fee", "grant_entitlement", "activate_rule"}
 )
 
-
-def _selector_matches(selector: Selector, segment: SpendSegment) -> bool:
-    if selector.categories is not None and segment.category not in selector.categories:
-        return False
-    if selector.channels is not None and segment.channel not in selector.channels:
-        return False
-    if selector.merchant_groups is not None and segment.merchant_group not in selector.merchant_groups:
-        return False
-    return True
 
 
 @dataclass(frozen=True)
@@ -169,7 +160,7 @@ def evaluate_threshold(
 
     segments = milestone_segments if threshold.basis.measure == "milestone_eligible_spend" else waiver_segments
     if threshold.basis.selector_override is not None:
-        segments = [s for s in segments if _selector_matches(threshold.basis.selector_override, s)]
+        segments = [s for s in segments if selector_matches(threshold.basis.selector_override, s)]
 
     flags = window_flags(threshold.basis.window)
     events: list[ThresholdEvent] = []
@@ -269,7 +260,7 @@ def apply_rule_activations(
             continue
 
         affected_segments = [
-            s for s in reward_segments if s.month in active_months and _selector_matches(activated_rule.selector, s)
+            s for s in reward_segments if s.month in active_months and selector_matches(activated_rule.selector, s)
         ]
         for segment in affected_segments:
             results = [r for r in results if r.segment is not segment]

@@ -6,17 +6,20 @@ The seed->engine adapter below (`_load_card_rules`/`_load_thresholds`/
 `_load_benefits`/`_load_currencies`) translates directly from
 seeds/synthetic_cards.py so goldens test the same rule data that gets
 seeded into the database. It currently handles percentage/per_unit
-accruals, category/channel/merchant_group selectors, Stage 2's exclusions
-(`_load_exclusions`), Stage 5's full reward-measure cap support (any
-window kind, any scope), spend-measure incremental bands (`tier_mode`
+accruals, category/channel/merchant_group/geography selectors, Stage 2's
+exclusions (`_load_exclusions`), Stage 5's full reward-measure cap support
+(any window kind, any scope), spend-measure incremental bands (`tier_mode`
 inferred from rule_group + spend-measure caps, since the raw schema has
 no explicit field -- see `_load_card_rules`), activate_rule
 (requires_activation carried straight from the seed field), Stage 6-7's
 grant-type threshold payloads, Stage 8's currency/route valuation, Stage
-9's countable/voucher benefits, and Stage 10's surcharges
-(`_load_surcharges`). Forex is the only remaining gap (no golden needs it
-yet -- syn_travel's zero-forex card and international-spend rule are
-blocked on the geography selector gap, docs/DECISIONS.md #4).
+9's countable/voucher benefits, and Stage 10's surcharges/forex
+(`_load_surcharges`, `international_spend_total`). Every engine construct
+in Part C SS C.9's catalogue now has at least one golden exercising it.
+
+`_parse_spend_annual`'s key format is "category[/channel][@geography]" --
+e.g. "international_flights@international" -- geography defaults to
+"domestic" when omitted.
 
 Need/unit_value/utilisation/friction/primary-route assumptions have no
 home in the card schema at all (they're user/registry inputs, per C.7) --
@@ -31,7 +34,7 @@ from engine.accrue import Accrual, accrue_category_mode
 from engine.assemble import assemble_nacv, value_milestone_grants
 from engine.benefits import Benefit, value_countable_benefit, value_voucher_benefit
 from engine.caps import Cap, Window, apply_caps, apply_incremental_bands
-from engine.costs import Surcharge, compute_fees, surcharge_cost
+from engine.costs import Surcharge, compute_fees, forex_cost, international_spend_total, surcharge_cost
 from engine.eligibility import Exclusion, ExclusionSelector, apply_eligibility
 from engine.match import EarningRule, Selector, match
 from engine.normalise import AssumptionsSnapshot, CategorySpend, NormalisedSpend, SpendInput, normalise
@@ -50,6 +53,8 @@ def _selector_from_dict(d: dict) -> Selector:
         kwargs["channels"] = tuple(d["channels"])
     if d.get("merchant_groups") is not None:
         kwargs["merchant_groups"] = tuple(d["merchant_groups"])
+    if d.get("geography") is not None:
+        kwargs["geography"] = d["geography"]
     return Selector(**kwargs)
 
 
@@ -61,6 +66,8 @@ def _exclusion_selector_from_dict(d: dict) -> ExclusionSelector:
         kwargs["channels"] = tuple(d["channels"])
     if d.get("merchant_groups") is not None:
         kwargs["merchant_groups"] = tuple(d["merchant_groups"])
+    if d.get("geography") is not None:
+        kwargs["geography"] = d["geography"]
     return ExclusionSelector(**kwargs)
 
 
@@ -219,16 +226,22 @@ def _load_currencies() -> dict[str, RewardCurrency]:
 
 
 def _parse_spend_annual(spend_annual: dict, seasonality: dict | None = None) -> SpendInput:
-    """`seasonality`, if given, maps category -> a 12-weight list (C.9's
+    """Key format: "category[/channel][@geography]" -- geography defaults
+    to "domestic" when omitted (e.g. "international_flights@international").
+    `seasonality`, if given, maps category -> a 12-weight list (C.9's
     per-category custom seasonality); categories not in it default to
     normalise()'s uniform split."""
     lines = []
     for key, amount in spend_annual.items():
-        category, _, channel = key.partition("/")
+        category_and_channel, _, geography = key.partition("@")
+        category, _, channel = category_and_channel.partition("/")
         weights = None
         if seasonality and category in seasonality:
             weights = tuple(Decimal(str(w)) for w in seasonality[category])
-        lines.append(CategorySpend(category=category, channel=channel or None, annual_amount=Decimal(str(amount)), seasonality=weights))
+        lines.append(CategorySpend(
+            category=category, channel=channel or None, annual_amount=Decimal(str(amount)),
+            seasonality=weights, geography=geography or "domestic",
+        ))
     return SpendInput(category_spend=tuple(lines))
 
 
@@ -518,6 +531,66 @@ def test_golden_syn_fuel_surcharge():
     nacv = assemble_nacv(
         gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
         steady_fee=fees.steady_fee, year1_fee=fees.year1_fee, surcharge_cost=cost_of_surcharge,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    assert nacv.three_year == Decimal(str(golden["expected"]["nacv_3yr"]))
+
+
+def test_golden_syn_travel_forex():
+    golden = json.loads((GOLDENS_DIR / "golden_syn_travel_forex.json").read_text())
+    assert golden["card"] == "syn_travel"
+
+    spend_input = _parse_spend_annual(golden["spend_annual"])
+    normalised = normalise(spend_input, AssumptionsSnapshot())
+    eligible = apply_eligibility(normalised, exclusions=())  # syn_travel has no exclusions
+
+    international_segments = [s for s in eligible.reward if s.geography == "international"]
+    assert all(s.category == "international_flights" for s in international_segments)
+    assert sum((s.amount for s in international_segments), Decimal("0")) == Decimal("120000.00")
+
+    earning_rules, accruals, caps = _load_card_rules("syn_travel")
+    bindings = match(NormalisedSpend(segments=eligible.reward), earning_rules)
+
+    # intl REPLACES base on international spend (higher priority, not
+    # stacking); domestic grocery only ever matches base.
+    intl_rule_keys = {b.rule_key for b in bindings if b.segment.geography == "international"}
+    domestic_rule_keys = {b.rule_key for b in bindings if b.segment.geography == "domestic"}
+    assert intl_rule_keys == {"intl"}
+    assert domestic_rule_keys == {"base"}
+
+    uncapped = accrue_category_mode(bindings, accruals)
+    final = apply_caps(uncapped, caps, earning_rules, accruals)  # this card has no caps -> no-op
+    assert not any(r.flags for r in final)  # zero floor loss anywhere
+
+    currencies = _load_currencies()
+    primary_routes = golden["assumptions"]["primary_route"]
+    reward_valuations = value_accrual_results(final, accruals, currencies, primary_routes)
+    gross_reward_value = sum((v.v_exp_rupees for v in reward_valuations), Decimal("0"))
+    assert gross_reward_value == Decimal(str(golden["expected"]["gross_reward_value"]))
+
+    # Stage 10 (forex): this card's own zero markup, plus the contrast the
+    # golden's hand computation calls out -- the SAME spend at the seed's
+    # default 3.5% markup, purely illustrative, not part of syn_travel's NACV.
+    card = next(c for c in CARDS if c["key"] == "syn_travel")
+    forex_markup = Decimal(str(card["version"]["forex_markup"]))
+    intl_total = international_spend_total(eligible.reward)
+    cost_of_forex = forex_cost(intl_total, forex_markup)
+    assert cost_of_forex == Decimal(str(golden["expected"]["forex_cost"]))
+    assert forex_cost(intl_total, Decimal("0.035")) == Decimal("4956.000")  # the contrast
+
+    thresholds = _load_thresholds("syn_travel")
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)
+    assert fees.waived == golden["expected"]["waiver_achieved"]
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee, forex_cost=cost_of_forex,
     )
     assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
     assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
