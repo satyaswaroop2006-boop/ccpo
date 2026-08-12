@@ -1,6 +1,7 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 psycopg[binary]>=3.1
+python-dotenv>=1.0  # loads compute/.env's DATABASE_URL for local/test runs
 pulp>=2.8          # inner MILP (HiGHS via highspy, CBC bundled fallback)
 highspy>=1.7
 pytest>=8.0

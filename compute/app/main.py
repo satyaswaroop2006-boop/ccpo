@@ -5,13 +5,25 @@ Endpoints land per Part E §E.0: /evaluate and /next-best-spend in Phase 3,
 engine.evaluate.evaluate_card -> serialize) per CLAUDE.md rule 1 -- no
 financial math here, only in compute/engine/.
 """
+import os
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 
-from app.repository import CardNotFoundError, CardRepository, SyntheticCatalogRepository
-from app.schemas import (
+load_dotenv()  # compute/.env's DATABASE_URL, local-dev convenience; a real
+# deployment's own environment variables take precedence (load_dotenv()
+# never overwrites an already-set variable).
+
+from app.repository import (  # noqa: E402
+    CardNotFoundError,
+    CardRepository,
+    PostgresCardRepository,
+    SyntheticCatalogRepository,
+)
+from app.schemas import (  # noqa: E402
     EvaluateRequest,
     EvaluateResponse,
     NextBestSpendRequest,
@@ -20,17 +32,36 @@ from app.schemas import (
     SpendItemIn,
     spend_input_from_items,
 )
-from engine.evaluate import evaluate_card
+from engine.evaluate import evaluate_card  # noqa: E402
 
-app = FastAPI(title="ccpo-compute", version="0.1.0")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    yield
+    repository = get_repository()
+    if isinstance(repository, PostgresCardRepository):
+        repository.close()
+
+
+app = FastAPI(title="ccpo-compute", version="0.1.0", lifespan=_lifespan)
 
 
 @lru_cache
 def get_repository() -> CardRepository:
-    # Synthetic-catalog-backed for now (docs/DECISIONS.md's Phase 3 entry):
-    # DATABASE_URL doesn't resolve from this dev sandbox, and there's no
-    # local Postgres/Docker to verify a Postgres-backed repository against.
-    # Swapping this factory is the entire migration once that's resolved.
+    """Postgres-backed when `DATABASE_URL` is configured (docs/
+    DECISIONS.md #64) -- falls back to `SyntheticCatalogRepository` only
+    when it's unset entirely. A `DATABASE_URL` that IS set but fails to
+    connect raises loudly here (PostgresCardRepository's own `psycopg.
+    connect` call), rather than silently masking a real misconfiguration
+    behind fake catalog data -- a deployer who configured a database
+    expects it to be used, not quietly skipped. Cached for the service's
+    lifetime (one connection, not one per request); tests that need the
+    synthetic catalog regardless of environment override this dependency
+    directly (see `tests/test_api_evaluate.py`) rather than relying on
+    `DATABASE_URL` being unset."""
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        return PostgresCardRepository(database_url)
     return SyntheticCatalogRepository()
 
 

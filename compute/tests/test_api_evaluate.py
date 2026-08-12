@@ -4,6 +4,14 @@ check the HTTP/JSON shape and delegate correctness to the same numbers
 `tests/test_evaluate_orchestrator.py` already proved against the golden
 battery; `test_evaluate_matches_golden_syn_ecom_basic` cross-checks one
 end-to-end HTTP round trip against `golden_syn_ecom_basic.json` directly.
+
+`get_repository` is explicitly overridden to `SyntheticCatalogRepository`
+rather than relying on `DATABASE_URL` being unset (docs/DECISIONS.md #64):
+`app/main.py`'s live default is Postgres-backed whenever `DATABASE_URL` IS
+configured, which it now is in this repo's `compute/.env` -- these tests
+stay fast and deterministic regardless of what's in that file or reachable
+over the network, the same guarantee `tests/test_postgres_repository.py`
+deliberately does NOT have (it's the one place DB reachability matters).
 """
 import json
 from decimal import Decimal
@@ -11,10 +19,12 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, get_repository
+from app.repository import SyntheticCatalogRepository
 
 GOLDENS_DIR = Path(__file__).resolve().parent.parent / "goldens"
 
+app.dependency_overrides[get_repository] = SyntheticCatalogRepository
 client = TestClient(app)
 
 

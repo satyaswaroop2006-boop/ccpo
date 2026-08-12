@@ -54,18 +54,28 @@ decision in `docs/DECISIONS.md` (create on first use).
       fixture), #27 (trace is a flat list, not C.10's full node schema),
       plus mcc/networks/txn/date selector fields still unsupported (only
       categories/channels/merchant_group/geography are).
-- [x] Phase 3 — `POST /evaluate` + `POST /next-best-spend` built and
-      tested (199/199 tests green): `engine/card_bundle.py` (card-dict ->
-      engine-dataclass loader, extracted from the golden battery's
-      adapters, zero behaviour change) + `engine/evaluate.py`
-      (`evaluate_card`, the Stage 1-11 pipeline composition, verified
-      against all 12 goldens) + `app/schemas.py`/`app/repository.py`/
-      `app/main.py`. **Not yet done**: `PostgresCardRepository` —
-      `SyntheticCatalogRepository` (seeds/synthetic_cards.py-backed) is
-      the only `CardRepository` today because `compute/.env`'s
-      `DATABASE_URL` doesn't resolve from the dev sandbox (docs/
-      DECISIONS.md #62) — carried-forward next task once a reachable
-      connection string is confirmed, along with `evaluation_runs`/
+- [x] Phase 3 — `POST /evaluate` + `POST /next-best-spend` built, tested,
+      and live-wired to Postgres (214/214 tests green): `engine/
+      card_bundle.py` (card-dict -> engine-dataclass loader, extracted
+      from the golden battery's adapters, zero behaviour change) +
+      `engine/evaluate.py` (`evaluate_card`, the Stage 1-11 pipeline
+      composition, verified against all 12 goldens) + `app/schemas.py`/
+      `app/repository.py`/`app/main.py`. `app/repository.py` has both
+      `CardRepository` implementations: `SyntheticCatalogRepository`
+      (seeds/synthetic_cards.py-backed) and `PostgresCardRepository`,
+      built and verified against the live, already-seeded Supabase
+      database once Satya supplied a working pooler connection string
+      (docs/DECISIONS.md #62/#65) — 15 integration tests
+      (`tests/test_postgres_repository.py`, auto-skipped when
+      `DATABASE_URL` isn't set/reachable). `app/main.py`'s `get_repository`
+      now defaults to `PostgresCardRepository` whenever `DATABASE_URL` is
+      configured (#64/#66, resolved) — falls back to the synthetic catalog
+      only when it's unset, raises loudly (not silently) if it's set but
+      unreachable; `tests/test_api_evaluate.py` pins itself to the
+      synthetic catalog via `app.dependency_overrides` so it stays fast
+      and DB-independent regardless (#67). Live-verified: `POST /evaluate`
+      against a running server reproduced `golden_syn_miles_vouchers.json`
+      exactly, served from Postgres. **Not yet done**: `evaluation_runs`/
       `evaluation_traces` persistence. `/next-best-spend` is an annual
       marginal-delta MVP, not wallet mid-year state (#61, folded into
       #10's deferral) — the repair *pass* over the breakpoint compiler

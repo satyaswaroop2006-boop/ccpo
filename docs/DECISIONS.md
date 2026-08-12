@@ -5,15 +5,16 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (commit 0536595 + Phase 3 /evaluate, /next-best-spend)
+## Status as of 2026-08-12 (commit TBD -- PostgresCardRepository live-wired)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
 177/177 tests green, 12/12 synthetic cards have a passing golden -- full
-C.9 coverage. Phase 3 (this entry): `engine/evaluate.py`'s `evaluate_card`
-orchestrator, `POST /evaluate` and `POST /next-best-spend` wired in
-`app/main.py`, backed by `SyntheticCatalogRepository` -- 199/199 tests
-green. No blocking deferrals -- 10 non-blocking items remain open (table
-below); none of them gate this work or starting Phase 4.
+C.9 coverage. Phase 3 complete end-to-end: `engine/evaluate.py`'s
+`evaluate_card` orchestrator, `POST /evaluate` and `POST /next-best-spend`
+wired in `app/main.py`, now live-backed by `PostgresCardRepository` when
+`DATABASE_URL` is configured (#64, resolved below) -- 214/214 tests green.
+No blocking deferrals -- 8 non-blocking items remain open (table below);
+none of them gate this work or starting Phase 4.
 
 **Genuinely open items** (none blocking today's work; listed so a future
 session doesn't have to scan all entries below to find them):
@@ -28,7 +29,6 @@ session doesn't have to scan all entries below to find them):
 | #27 | Explanation trace is a flat line-item list | Not C.10's full per-node schema (`cap_state`, per-currency `v`/`phi`, `source_refs`) — a real fidelity gap, flagged for a follow-up pass if §37/§74 need it soon |
 | #29 | `WelcomeValue` has no real fixture | Parameter exists in `assemble_nacv`, always 0 in practice — no card/schema payload type for welcome bonuses |
 | #10, #61 | True anniversary alignment; wallet mid-year state (`current_year_progress`) | Approximated as calendar-aligned; needs `card_anniversary_month` AND a way to seed already-triggered threshold/cap state, neither built (wallet mode itself doesn't exist yet) |
-| #62 | `PostgresCardRepository` not built | `DATABASE_URL` doesn't resolve from the dev sandbox; no local Postgres/Docker to verify against either. `SyntheticCatalogRepository` is the only `CardRepository` implementation |
 | — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
 
 **Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
@@ -40,7 +40,8 @@ path (#5, resolved #55-56), `condition: "on_renewal"` year-mode filtering
 (#14, resolved #59-60). All 12/12 synthetic cards now have a golden.
 `/evaluate` + `/next-best-spend` MVP scope confirmed with Satya (#63):
 synthetic-catalog-backed for now, annual marginal-delta (not wallet
-mid-year) for Next-Best-Spend.
+mid-year) for Next-Best-Spend. `PostgresCardRepository` built and verified
+against the live database (#62, resolved below).
 
 ---
 
@@ -1197,6 +1198,18 @@ consumes -- see #63) is the explicit next task once a reachable connection
 string is confirmed, not attempted blind. `evaluation_runs`/
 `evaluation_traces` row persistence is the same blocker, also deferred.
 
+**RESOLVED 2026-08-12** -- Satya supplied a working connection string:
+Supabase's session-pooler host (`aws-0-ap-southeast-1.pooler.supabase.com:
+6543`, username `postgres.<project-ref>`) instead of the direct
+`db.<ref>.supabase.co:5432` host that failed DNS resolution -- confirms
+the IPv6-vs-IPv4 diagnosis. The database was already fully seeded (all 12
+synthetic cards, published) from an earlier session outside this sandbox.
+See entry #65 below for `PostgresCardRepository`'s build and verification.
+`evaluation_runs`/`evaluation_traces` persistence remains unbuilt (not
+needed by `/evaluate`'s current stateless response contract) and
+`app/main.py`'s live default remains `SyntheticCatalogRepository` (#64,
+still open -- switching it is a separate decision).
+
 ### 63. `engine/card_bundle.py` extracted from `tests/test_goldens.py`'s
 five private adapter functions -- zero behaviour change, proven by the
 unchanged 12 goldens
@@ -1243,3 +1256,130 @@ here without depending on that module.
 199/199 tests green (177 Phase 2 + 13 orchestrator-vs-golden + 6 API + 3
 next-best-spend). Phase 3 complete for the synthetic-catalog path;
 `PostgresCardRepository` (#62) is the carried-forward next task.
+
+---
+
+## 2026-08-12 -- `PostgresCardRepository` built and verified against the
+live database, resolving #62
+
+Satya supplied a working `DATABASE_URL`: Supabase's session-pooler host
+(`aws-0-ap-southeast-1.pooler.supabase.com:6543`, username `postgres.
+<project-ref>`) rather than the direct `db.<ref>.supabase.co:5432` host
+that failed DNS resolution in #62 -- confirms that diagnosis (Supabase's
+direct-connection endpoint needs IPv6; the pooler is IPv4-reachable).
+`compute/.env` updated with the password percent-encoded (`#` ->
+`%23`), matching the encoding the file's prior (unreachable) URL already
+used.
+
+### 65. `PostgresCardRepository` (`app/repository.py`) -- same translation,
+different source, deterministic ordering added
+
+Reads `cards`/`current_card_versions` (the published-and-effective-today
+view, not a hand-rolled status/date filter) /`earning_rules`/`caps`/
+`earning_rule_caps`/`thresholds`/`threshold_tiers`/`exclusions`/
+`benefits`/`surcharges`/`reward_currencies`/`redemption_routes`, assembles
+each card into the exact dict shape `seeds/synthetic_cards.py`'s `CARDS`
+entries already have, and feeds it through the SAME `engine/card_bundle.
+bundle_from_dict` translation `SyntheticCatalogRepository` uses (per #63's
+whole point -- one translation, not two that could drift).
+
+Every query got an explicit `ORDER BY key` (or `currency_id, key` for
+routes) that the original design sketch in #62 hadn't specified -- without
+it, Postgres row order is unspecified, which would make the repository's
+own output non-deterministic between calls (CLAUDE.md rule 5: no
+ordering dependence). `CardRuleBundle`'s tuple fields (`earning_rules`,
+`caps`, `thresholds`, `exclusions`, `surcharges`) are order-sensitive for
+equality even though nothing in the engine's own matching/evaluation logic
+actually depends on their order (`match.py` picks winners by explicit
+`priority`, never list position) -- ordering by `key` makes the repository
+itself deterministic regardless, independent of whether any current
+consumer happens to care.
+
+Verified two ways against the live, already-seeded database (found fully
+seeded from an earlier session outside this sandbox -- all 12 cards,
+published, matching `seeds/synthetic_cards.py` exactly): (1)
+`tests/test_postgres_repository.py` compares every field of all 12 cards'
+`CardRuleBundle`s against `SyntheticCatalogRepository`'s, sorted-tuple
+comparison for the order-sensitive fields (declaration order in the
+Python list has no reason to match `ORDER BY key`, and isn't semantically
+meaningful either way); (2) `evaluate_card` run against the
+Postgres-sourced `syn_miles` bundle reproduces `golden_syn_miles_
+vouchers.json`'s NACV exactly (steady-state ₹22,600, Year-1 ₹10,800, 3yr
+₹56,000).
+
+One expected, harmless mismatch surfaced by (1) before the resolution:
+`redemption_routes.friction_default` is `NOT NULL DEFAULT 1.0` in the
+schema, so the DB always materializes `friction=Decimal("1.0")` for a
+route where the Python fixture leaves it implicit (`friction=None`,
+meaning "use `engine/valuation.py`'s own `DEFAULT_FRICTION`"). Both are
+computed identically by `_route_value_per_point` -- confirmed by (2)
+producing byte-identical NACV output, not just asserted from reading the
+formula. Structural comparisons in the test therefore skip the
+`RewardCurrency`/`RedemptionRoute` dataclasses directly and rely on (2)'s
+end-to-end proof instead.
+
+`app/main.py`'s `get_repository()` still returns `SyntheticCatalogRepository`
+unconditionally -- switching the live default (and deciding what happens
+when `DATABASE_URL` is unset in some future deployment) is #64, a
+separate, not-yet-made decision. 214/214 tests green (199 prior + 15 new
+Postgres integration tests, skipped automatically when `DATABASE_URL`
+isn't set/reachable so this never blocks `pytest` in an environment
+without database access).
+
+---
+
+## 2026-08-12 -- `app/main.py`'s live default switched to
+`PostgresCardRepository`, resolving #64
+
+### 66. Fail loudly on a configured-but-unreachable `DATABASE_URL`, not
+silently on synthetic data
+
+`get_repository()` now returns `PostgresCardRepository(database_url)`
+whenever `DATABASE_URL` is set at all, falling back to
+`SyntheticCatalogRepository` only when it's unset entirely. Deliberately
+did NOT make it "try Postgres, fall back to synthetic on any connection
+error" -- a deployer who configured a database expects `/evaluate` to
+serve it; silently substituting the synthetic fixture cards on a
+connection failure would mask a real misconfiguration behind numbers that
+merely look plausible (the synthetic and live catalogs happen to hold the
+same 12 cards today, which is exactly what would make the substitution
+invisible). `PostgresCardRepository.__init__`'s own `psycopg.connect`
+already raises on failure; that propagates as-is.
+
+Load order matters here: `compute/.env` is loaded via `python-dotenv` at
+module import time (`load_dotenv()`, which never overwrites an
+already-set environment variable, so a real deployment's own env vars
+still win over a stray `.env` file) -- before `get_repository` is ever
+called, since it's only invoked lazily per-request via FastAPI's
+`Depends`, not at import time.
+
+`app/main.py`'s prior `@app.on_event("shutdown")` handler (used to close
+the Postgres connection on shutdown) turned out to be deprecated in the
+installed FastAPI (0.141) -- switched to the `lifespan` async context
+manager FastAPI's own docs now recommend, same effect (closes the
+connection if a `PostgresCardRepository` was ever constructed, no-ops
+otherwise).
+
+### 67. `tests/test_api_evaluate.py` explicitly overrides `get_repository`
+to `SyntheticCatalogRepository`
+
+Switching the live default meant `tests/test_api_evaluate.py`'s
+`TestClient(app)` would otherwise start hitting the real, network-
+dependent database on every test run purely because `compute/.env` now
+has a working `DATABASE_URL` -- silently turning a fast, deterministic
+test suite into a slow, flaky, network-dependent one, exactly the failure
+mode `tests/test_postgres_repository.py` was deliberately isolated to
+avoid. Fixed with FastAPI's own `app.dependency_overrides[get_repository]
+= SyntheticCatalogRepository` at module scope -- the standard, supported
+way to pin a test's dependencies regardless of the app's runtime
+configuration, rather than relying on `DATABASE_URL` happening to be
+unset in whatever environment the tests run in.
+
+Verified live end-to-end: `POST /evaluate` against a running `uvicorn
+app.main:app` (with `DATABASE_URL` set, no override) for `syn_miles`
+reproduced `golden_syn_miles_vouchers.json`'s NACV exactly (steady-state
+₹22,600, Year-1 ₹10,800, 3yr ₹56,000) -- served from Postgres this time,
+not the synthetic catalog, confirming the switch actually took effect and
+not just that the code compiles. 214/214 tests green, same count as
+before (the fix reshuffled which repository each suite exercises, added
+no new test files).
