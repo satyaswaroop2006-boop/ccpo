@@ -5,11 +5,12 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (commit 689d345)
+## Status as of 2026-08-12 (commit 46684fb + syn_points/syn_flat/syn_waiver goldens)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
-168/168 tests green. 7/12 synthetic cards have a passing golden (syn_ecom,
-syn_fuel, syn_lounge, syn_miles, syn_slab, syn_travel, syn_upi).
+171/171 tests green. 10/12 synthetic cards have a passing golden (syn_ecom,
+syn_flat, syn_fuel, syn_lounge, syn_miles, syn_points, syn_slab,
+syn_travel, syn_upi, syn_waiver).
 
 **Genuinely open items** (none blocking today's work; listed so a future
 session doesn't have to scan all 54 entries below to find them):
@@ -26,13 +27,14 @@ session doesn't have to scan all 54 entries below to find them):
 | #29 | `WelcomeValue` has no real fixture | Parameter exists in `assemble_nacv`, always 0 in practice — no card/schema payload type for welcome bonuses |
 | #10 | True anniversary alignment | Approximated as calendar-aligned; needs `card_anniversary_month` from wallet mode (not built) |
 | — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
-| — | 5 synthetic cards without a golden | syn_flat, syn_points, syn_renewal, syn_retro, syn_waiver |
+| — | 2 synthetic cards without a golden | syn_renewal, syn_retro |
 
 **Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
 `activate_rule` prospective/retroactive (#13, resolved #36-40), `syn_slab`
 fill-order for `rule`-scope bands (#9, resolved #41-45, #45-update),
 geography-aware selectors (#4, resolved #51-54), `PV` = NACV for a single
-card, not a separate output (#28).
+card, not a separate output (#28), `CategorySpend.merchant_group` input
+path (#5, resolved #55-56).
 
 ---
 
@@ -140,6 +142,9 @@ channel. Stage 3's own tests construct `SpendSegment` directly with
 tests already used for fields Stage 1 doesn't produce. Wiring a real input
 path through Stage 1 is deferred until a card actually needs it end-to-end
 through the full pipeline (same "additive when needed" posture as #4).
+
+**RESOLVED 2026-08-12** -- see entries #55-56 below. `golden_syn_points_
+portal_stacking.json` now exercises `CategorySpend.merchant_group` end-to-end.
 
 ---
 
@@ -949,3 +954,100 @@ Rs4,956 contrast at the seed's default 3.5% markup on the identical spend
 (Rs3,00,000 spend past the Rs2,50,000 threshold), but the joining fee
 still applies in Year-1 regardless -> NACV steady-state Rs1,890, Year-1
 -Rs1,650, 3yr Rs2,130. 168/168 tests total (7th golden).
+
+---
+
+## 2026-08-12 -- `CategorySpend.merchant_group` (Part C SS C.2.1), resolving
+#5, wire golden_syn_points_portal_stacking.json (C.9 Example 3)
+
+### 55. `SpendSegment.merchant_group` finally gets a Stage 1 input path --
+the deferral in #5 closed exactly the way it predicted
+
+#5 (2026-08-11) added `merchant_group` to `SpendSegment` for Stage 3's
+sake but deliberately left `normalise()` unable to populate it, "deferred
+until a card actually needs it end-to-end through the full pipeline."
+syn_points (C.9 Example 3, portal_bonus's `merchant_groups: [synth_portal]`
+selector) is that card. Fix is the same shape as geography's (#51): added
+`merchant_group: str | None = None` to `CategorySpend`, threaded straight
+onto each `SpendSegment` normalise() produces. Unlike geography, `None` is
+a real, permanent state here (not "resolved later") -- most spend has no
+merchant-group breakdown at all, the same status `channel` already has --
+so no validation, no default-to-a-string the way geography got.
+
+The golden adapter (`test_goldens.py::_parse_spend_annual`) needed a way
+for a golden's `spend_annual` dict to express a merchant group per spend
+line. Extended the existing "category[/channel][@geography]" key-suffix
+convention with a third token: "category[/channel][~merchant_group]
+[@geography]" (e.g. "hotels_domestic~synth_portal"). This "~" spelling is
+adapter-only shorthand for golden JSON files, not part of C.2.1's own
+schema -- real card/user spend declarations don't need it, since C.2.1's
+actual input vocabulary has no per-merchant-group spend-entry concept
+either (merchant_group is a rule-selector dimension, not a user-spend
+dimension, until/unless a real ingestion source supplies it).
+
+### 56. `golden_syn_points_portal_stacking.json` hand computation
+
+Rs1,50,000/mo hotels_domestic tagged merchant_group=synth_portal (matches
+BOTH base, 5pt/Rs150, and portal_bonus, 20pt/Rs150, `stacks_with_base`) +
+Rs30,000/mo dining (matches only base). Both categories' ticket sizes
+(Rs9,000, Rs600) are exact multiples of the Rs150 per-unit divisor, so
+floor(ticket/U) loses no remainder anywhere -- zero floor loss, matching
+the design discipline already used in syn_upi/syn_fuel's goldens.
+
+Per month: base = 5,000 (hotels) + 1,000 (dining) = 6,000pts, uncapped
+(base has no cap of its own). portal_bonus = 20,000pts uncapped, but
+`cap_portal` (15,000/mo, `scope: rule_group:portal_accel`, `overflow:
+zero`) pools ONLY rules in that rule_group -- base isn't a member, so its
+reward on the very same hotels_domestic spend is untouched by this cap,
+the point of the golden's `purpose` field. Capped bonus = 15,000/mo.
+Annual gross = (6,000+15,000)*12 = 2,52,000 pts.
+
+Valued at the declared primary route "portal" (travel_portal, ratio 0.50,
+friction_default 0.9, no per-point fee) -> Rs0.45/pt -> gross reward value
+Rs1,13,400.00 -- the first golden to price a non-1.0-friction route (prior
+synth_points goldens all used "stmt", ratio-only). Waiver threshold
+(Rs3,00,000 cumulative annual, no exclusions) clears easily on Rs21,60,000
+total spend -> annual fee waived; joining fee (Rs2,500) still applies in
+Year-1 regardless, same as every other waived-fee golden. NACV
+steady-state Rs1,13,400.00, Year-1 Rs1,10,450.00, 3yr Rs3,37,250.00.
+169/169 tests total (8th golden).
+
+---
+
+## 2026-08-12 -- Wire golden_syn_flat_baseline.json (C.9 Example 1) and
+golden_syn_waiver_divergence.json (C.9 Example 5)
+
+### 57. `golden_syn_flat_baseline.json` hand computation
+
+The deliberately plainest golden in the battery: one uncapped percentage
+rule (1.5%, `floor_paise_per_txn`), no caps, no thresholds, no exclusions,
+no fees at all (`annual_fee`/`joining_fee` both 0). Rs2,40,000/yr grocery +
+Rs1,20,000/yr dining, both tickets even so `ticket*1.5%` lands on an exact
+paisa amount already -- zero floor loss. Gross reward = 3,60,000*0.015 =
+Rs5,400.00. No fee either year -> NACV steady-state = Year-1 = Rs5,400.00,
+3yr = Rs16,200.00. Exists mainly as a regression tripwire: if this one ever
+goes red, the bug is in the pipeline's plumbing, not in some construct-
+specific interaction.
+
+### 58. `golden_syn_waiver_divergence.json` hand computation -- the point is
+that "waiver-eligible spend" and "reward spend" are different populations
+
+syn_waiver carries two exclusions pointing in opposite directions:
+`rent_no_waiver` (rent earns reward, does NOT count toward the waiver) and
+`fuel_no_rewards` (fuel earns nothing, DOES count toward the waiver).
+Chose spend specifically so the two views diverge in the direction that
+matters: reward view (grocery+rent = Rs4,20,000) and even raw total spend
+(Rs5,16,000) both clear the Rs3,00,000 waiver tier comfortably, but the
+waiver view (grocery+fuel = Rs2,16,000, since rent is dropped and fuel is
+kept) does not -- fee stays charged. A golden that instead crossed the
+threshold either way (or used only one exclusion) wouldn't actually catch
+a bug that summed the wrong view; this one does, by construction.
+
+Gross reward = (1,20,000+3,00,000)*0.01 = Rs4,200.00 (fuel earns 0, having
+been excluded from the reward view at Stage 2 entirely -- it never reaches
+Stage 3). Fee not waived: joining_fee=999, annual_fee=999 both charged ->
+steady_fee = 999*1.18 = Rs1,178.82, year1_fee = 1,998*1.18 = Rs2,357.64.
+NACV steady-state = 4,200.00-1,178.82 = Rs3,021.18. Year-1 = 4,200.00-
+2,357.64 = Rs1,842.36. 3yr = 1,842.36+2*3,021.18 = Rs7,884.72.
+171/171 tests total (9th and 10th goldens). Only syn_renewal and syn_retro
+remain unwired.

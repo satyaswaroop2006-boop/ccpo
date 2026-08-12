@@ -18,6 +18,12 @@ onto each `SpendSegment` it produces; UPI-decomposed segments are always
 domestic (UPI has no international rails). Matching against a rule's
 `geography` selector is Stage 3/2/6-7/5's concern (`match.py::
 selector_matches`), not this stage's.
+
+`merchant_group`, unlike geography, genuinely can be unspecified (`None`)
+-- most user-declared spend has no merchant-group breakdown at all, the
+same "resolved later or never" status as `channel`. `CategorySpend.
+merchant_group` threads straight onto each `SpendSegment` it produces
+(UPI-decomposed segments never carry one); see docs/DECISIONS.md #5.
 """
 from __future__ import annotations
 
@@ -80,6 +86,7 @@ class CategorySpend:
     channel: str | None = None  # None = unspecified/general; resolved at Stage 3 (match)
     seasonality: tuple[Decimal, ...] | None = None  # 12 weights summing to 1; None = uniform
     geography: str = "domestic"  # "domestic" | "international"
+    merchant_group: str | None = None  # None = unspecified; threaded straight onto each SpendSegment
 
 
 @dataclass(frozen=True)
@@ -185,6 +192,7 @@ def normalise(spend_input: SpendInput, assumptions: AssumptionsSnapshot) -> Norm
                     amount=amount,
                     ticket_size=ticket_size,
                     geography=line.geography,
+                    merchant_group=line.merchant_group,
                 )
             )
 

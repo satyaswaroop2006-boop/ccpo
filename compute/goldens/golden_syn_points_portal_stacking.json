@@ -1,0 +1,39 @@
+{
+  "id": "golden_syn_points_portal_stacking",
+  "purpose": "C.9 Example 3 (points card with shared accelerated cap): per_unit rounding (floor_per_txn), stacks_with_base (portal_bonus adds on top of base, not instead of it), and a monthly reward-measure cap scoped to a rule_group (cap_portal only sums portal_bonus's reward, leaving base's reward on the same spend uncapped), plus the travel_portal redemption route's non-1.0 friction default.",
+  "card": "syn_points",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "primary_route": { "synth_points": "portal" },
+    "note": "Both categories' ticket sizes are exact multiples of the Rs150 per_unit divisor (hotels_domestic 9000/150=60, dining 600/150=4), so floor(ticket/U) loses no remainder and the category-mode effective rate equals the true continuous rate exactly -- zero floor loss, no rounding_estimated flag expected anywhere."
+  },
+  "spend_annual": {
+    "hotels_domestic~synth_portal": 1800000,
+    "dining": 360000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Stage 3 (match): hotels_domestic spend carries merchant_group=synth_portal, so it matches BOTH base (selector={}) and portal_bonus (merchant_groups=[synth_portal], stacks_with_base=true, rule_group=portal_accel) -- base binds as the non-stacking winner, portal_bonus binds alongside it. Dining spend has no merchant_group -> matches only base.",
+    "Stage 4 (accrue), per month: hotels_domestic Rs1,50,000/month, ticket Rs9,000. ea_base = floor(9000/150)*5/9000 = 60*5/9000 = 1/30 exact -> base reward = 1,50,000/30 = 5,000.00 pts. ea_bonus = 60*20/9000 = 2/15 exact -> portal_bonus reward (uncapped) = 1,50,000*2/15 = 20,000.00 pts.",
+    "dining Rs30,000/month, ticket Rs600. ea_base = floor(600/150)*5/600 = 4*5/600 = 1/30 exact -> base reward = 30,000/30 = 1,000.00 pts.",
+    "Stage 5 (cap): cap_portal = 15,000 bonus pts/calendar_month, scope=rule_group:portal_accel, overflow=zero. Only portal_bonus belongs to that rule_group (base has no rule_group), so the cap sums portal_bonus's reward alone: 20,000 > 15,000 every month -> capped to 15,000/month, the 5,000/month excess simply discarded. base's 5,000/month (same hotels_domestic spend) is untouched by this cap -- it isn't in the rule_group at all.",
+    "Annual gross reward = (base-on-hotels_domestic 5,000 + capped-portal_bonus 15,000)*12 + (base-on-dining 1,000)*12 = 20,000*12 + 1,000*12 = 2,40,000 + 12,000 = 2,52,000.00 pts (synth_points).",
+    "Stage 8 (valuation): declared primary route 'portal' (travel_portal, ratio 0.50, friction_default 0.9, no per_point_fee) -> per-point value = 0.50*0.9 = Rs0.45. gross_reward_value = 2,52,000 * 0.45 = Rs1,13,400.00.",
+    "Stage 6-7 (waiver): no exclusions on this card -> waiver-eligible spend = all spend = 18,00,000 + 3,60,000 = Rs21,60,000 >= Rs3,00,000 threshold -> fee waived (fee='annual' only).",
+    "Fees: joining_fee=Rs2,500, annual_fee=Rs2,500. Waived -> charged_annual=0 -> steady_fee = 0*1.18 = Rs0.00. year1_fee = (2,500+0)*1.18 = Rs2,950.00 (joining fee is never waived by this payload, only the annual fee is).",
+    "NACV steady-state = 1,13,400.00 (GR) + 0 (milestone) + 0 (benefit) - 0 (steady_fee) = Rs1,13,400.00.",
+    "NACV Year-1 = 1,13,400.00 - 2,950.00 (year1_fee) = Rs1,10,450.00.",
+    "3-year cumulative = 1,10,450.00 + 2*1,13,400.00 = 1,10,450.00 + 2,26,800.00 = Rs3,37,250.00."
+  ],
+  "expected": {
+    "gross_reward_value": 113400.00,
+    "milestone_value": 0.00,
+    "waiver_achieved": true,
+    "fee_paid": 0.00,
+    "nacv_steady_state": 113400.00,
+    "nacv_year_1": 110450.00,
+    "nacv_3yr": 337250.00,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}

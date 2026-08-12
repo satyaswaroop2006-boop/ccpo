@@ -44,10 +44,10 @@ decision in `docs/DECISIONS.md` (create on first use).
 
 - [x] Phase 1 — scaffold, migration, synthetic seed
 - [x] Phase 2 — engine Stages 1–11 (`compute/engine/`) + `breakpoints.py`
-      (C.0's compile step) all implemented, 168/168 tests green. Golden
-      coverage: 7 of 12 synthetic cards wired (syn_ecom, syn_fuel,
-      syn_lounge, syn_miles, syn_slab, syn_travel, syn_upi) — syn_flat,
-      syn_points, syn_renewal, syn_retro, syn_waiver still need one, but
+      (C.0's compile step) all implemented, 171/171 tests green. Golden
+      coverage: 10 of 12 synthetic cards wired (syn_ecom, syn_flat,
+      syn_fuel, syn_lounge, syn_miles, syn_points, syn_slab, syn_travel,
+      syn_upi, syn_waiver) — syn_renewal, syn_retro still need one, but
       nothing blocks adding them incrementally. Open deferrals (none
       blocking): docs/DECISIONS.md, esp. #2 (UPI ticket-size question,
       never confirmed), #11/#32 (multi-category pooled cap/band windows),

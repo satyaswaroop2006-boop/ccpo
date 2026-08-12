@@ -17,9 +17,12 @@ grant-type threshold payloads, Stage 8's currency/route valuation, Stage
 (`_load_surcharges`, `international_spend_total`). Every engine construct
 in Part C SS C.9's catalogue now has at least one golden exercising it.
 
-`_parse_spend_annual`'s key format is "category[/channel][@geography]" --
-e.g. "international_flights@international" -- geography defaults to
-"domestic" when omitted.
+`_parse_spend_annual`'s key format is "category[/channel][~merchant_group]
+[@geography]" -- e.g. "international_flights@international" or
+"hotels_domestic~synth_portal" -- geography defaults to "domestic" and
+merchant_group to unset (None) when omitted. The "~merchant_group" token is
+a golden-adapter-only spelling (not part of C.2.1's own JSON vocabulary);
+see docs/DECISIONS.md #5 for why `CategorySpend` needed the field at all.
 
 Need/unit_value/utilisation/friction/primary-route assumptions have no
 home in the card schema at all (they're user/registry inputs, per C.7) --
@@ -226,23 +229,67 @@ def _load_currencies() -> dict[str, RewardCurrency]:
 
 
 def _parse_spend_annual(spend_annual: dict, seasonality: dict | None = None) -> SpendInput:
-    """Key format: "category[/channel][@geography]" -- geography defaults
-    to "domestic" when omitted (e.g. "international_flights@international").
-    `seasonality`, if given, maps category -> a 12-weight list (C.9's
-    per-category custom seasonality); categories not in it default to
-    normalise()'s uniform split."""
+    """Key format: "category[/channel][~merchant_group][@geography]" --
+    geography defaults to "domestic" and merchant_group to unset (None)
+    when omitted (e.g. "international_flights@international",
+    "hotels_domestic~synth_portal"). `seasonality`, if given, maps
+    category -> a 12-weight list (C.9's per-category custom seasonality);
+    categories not in it default to normalise()'s uniform split."""
     lines = []
     for key, amount in spend_annual.items():
-        category_and_channel, _, geography = key.partition("@")
-        category, _, channel = category_and_channel.partition("/")
+        rest, _, geography = key.partition("@")
+        rest, _, merchant_group = rest.partition("~")
+        category, _, channel = rest.partition("/")
         weights = None
         if seasonality and category in seasonality:
             weights = tuple(Decimal(str(w)) for w in seasonality[category])
         lines.append(CategorySpend(
             category=category, channel=channel or None, annual_amount=Decimal(str(amount)),
             seasonality=weights, geography=geography or "domestic",
+            merchant_group=merchant_group or None,
         ))
     return SpendInput(category_spend=tuple(lines))
+
+
+def test_golden_syn_flat_baseline():
+    golden = json.loads((GOLDENS_DIR / "golden_syn_flat_baseline.json").read_text())
+    assert golden["card"] == "syn_flat"
+    assert golden["seasonality"] == "uniform"
+
+    spend_input = _parse_spend_annual(golden["spend_annual"])
+    normalised = normalise(spend_input, AssumptionsSnapshot())
+    eligible = apply_eligibility(normalised, exclusions=())  # syn_flat has no exclusions
+
+    earning_rules, accruals, caps = _load_card_rules("syn_flat")
+    assert caps == ()  # this card has none at all
+    bindings = match(NormalisedSpend(segments=eligible.reward), earning_rules)
+    # base (selector={}) is the ONLY rule -- every segment binds to it.
+    assert {b.rule_key for b in bindings} == {"base"}
+
+    uncapped = accrue_category_mode(bindings, accruals)
+    final = apply_caps(uncapped, caps, earning_rules, accruals)  # no caps -> no-op
+    assert not any(r.flags for r in final)  # both tickets even -> zero floor loss
+
+    gross_reward_value = sum((r.reward for r in final), Decimal("0"))
+    assert gross_reward_value == Decimal(str(golden["expected"]["gross_reward_value"]))
+
+    thresholds = _load_thresholds("syn_flat")
+    assert thresholds == ()  # this card has none
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+
+    card = next(c for c in CARDS if c["key"] == "syn_flat")
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    assert nacv.three_year == Decimal(str(golden["expected"]["nacv_3yr"]))
 
 
 def test_golden_syn_ecom_basic():
@@ -480,6 +527,123 @@ def test_golden_syn_upi_channel():
 
     nacv = assemble_nacv(
         gross_reward=gross_reward_rupees, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    assert nacv.three_year == Decimal(str(golden["expected"]["nacv_3yr"]))
+
+
+def test_golden_syn_points_portal_stacking():
+    golden = json.loads((GOLDENS_DIR / "golden_syn_points_portal_stacking.json").read_text())
+    assert golden["card"] == "syn_points"
+
+    spend_input = _parse_spend_annual(golden["spend_annual"])
+    normalised = normalise(spend_input, AssumptionsSnapshot())
+
+    # hotels_domestic carries merchant_group=synth_portal (the "~" token in
+    # its spend_annual key); dining carries none.
+    portal_segments = [s for s in normalised.segments if s.merchant_group == "synth_portal"]
+    assert all(s.category == "hotels_domestic" for s in portal_segments)
+    assert sum((s.amount for s in portal_segments), Decimal("0")) == Decimal("1800000.00")
+
+    eligible = apply_eligibility(normalised, exclusions=())  # syn_points has no exclusions
+
+    earning_rules, accruals, caps = _load_card_rules("syn_points")
+    bindings = match(NormalisedSpend(segments=eligible.reward), earning_rules)
+
+    # hotels_domestic (portal merchant group) binds BOTH base (non-stacking
+    # winner) and portal_bonus (stacked alongside it); dining binds only base.
+    hotels_rule_keys = {b.rule_key for b in bindings if b.segment.category == "hotels_domestic"}
+    dining_rule_keys = {b.rule_key for b in bindings if b.segment.category == "dining"}
+    assert hotels_rule_keys == {"base", "portal_bonus"}
+    assert dining_rule_keys == {"base"}
+
+    uncapped = accrue_category_mode(bindings, accruals)
+    final = apply_caps(uncapped, caps, earning_rules, accruals)
+    assert not any(r.flags for r in final)  # zero floor loss anywhere; cap_portal's zero overflow needs no re-rate
+
+    # cap_portal (scope=rule_group:portal_accel) sums only portal_bonus's
+    # reward -- base's reward on the same hotels_domestic spend is a
+    # separate pool entirely and stays uncapped at 5,000/month * 12.
+    base_total = sum((r.reward for r in final if r.rule_key == "base"), Decimal("0"))
+    portal_bonus_total = sum((r.reward for r in final if r.rule_key == "portal_bonus"), Decimal("0"))
+    assert base_total == Decimal("72000.00")  # (5,000 hotels + 1,000 dining) * 12
+    assert portal_bonus_total == Decimal("180000.00")  # 15,000/month capped * 12
+
+    gross_reward_points = sum((r.reward for r in final), Decimal("0"))
+    assert gross_reward_points == Decimal("252000.00")
+
+    currencies = _load_currencies()
+    primary_routes = golden["assumptions"]["primary_route"]
+    reward_valuations = value_accrual_results(final, accruals, currencies, primary_routes)
+    gross_reward_rupees = sum((v.v_exp_rupees for v in reward_valuations), Decimal("0"))
+    assert gross_reward_rupees == Decimal(str(golden["expected"]["gross_reward_value"]))
+
+    thresholds = _load_thresholds("syn_points")
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+
+    card = next(c for c in CARDS if c["key"] == "syn_points")
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)
+    assert fees.waived == golden["expected"]["waiver_achieved"]
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_rupees, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    assert nacv.three_year == Decimal(str(golden["expected"]["nacv_3yr"]))
+
+
+def test_golden_syn_waiver_divergence():
+    golden = json.loads((GOLDENS_DIR / "golden_syn_waiver_divergence.json").read_text())
+    assert golden["card"] == "syn_waiver"
+
+    spend_input = _parse_spend_annual(golden["spend_annual"])
+    normalised = normalise(spend_input, AssumptionsSnapshot())
+
+    exclusions = _load_exclusions("syn_waiver")
+    assert len(exclusions) == 2  # rent_no_waiver, fuel_no_rewards
+    eligible = apply_eligibility(normalised, exclusions)
+
+    # rent is excluded from the WAIVER view only -- still present in reward.
+    reward_categories = {s.category for s in eligible.reward}
+    waiver_categories = {s.category for s in eligible.waiver}
+    assert reward_categories == {"grocery", "rent"}  # fuel excluded from reward
+    assert waiver_categories == {"grocery", "fuel"}  # rent excluded from waiver
+
+    earning_rules, accruals, caps = _load_card_rules("syn_waiver")
+    bindings = match(NormalisedSpend(segments=eligible.reward), earning_rules)
+    # fuel never reaches Stage 3 at all -- excluded from the reward view at Stage 2.
+    assert {b.segment.category for b in bindings} == {"grocery", "rent"}
+
+    uncapped = accrue_category_mode(bindings, accruals)
+    final = apply_caps(uncapped, caps, earning_rules, accruals)  # no caps on this card -> no-op
+    assert not any(r.flags for r in final)  # all tickets integer rupees -> zero floor loss
+
+    gross_reward_value = sum((r.reward for r in final), Decimal("0"))
+    assert gross_reward_value == Decimal(str(golden["expected"]["gross_reward_value"]))
+
+    thresholds = _load_thresholds("syn_waiver")
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+
+    card = next(c for c in CARDS if c["key"] == "syn_waiver")
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)
+    # waiver-view spend (grocery+fuel = Rs2,16,000) stays below the
+    # Rs3,00,000 tier even though reward-view spend (grocery+rent =
+    # Rs4,20,000) clears it comfortably -- the divergence this golden exists
+    # to exercise.
+    assert fees.waived == golden["expected"]["waiver_achieved"]
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
         steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
     )
     assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))

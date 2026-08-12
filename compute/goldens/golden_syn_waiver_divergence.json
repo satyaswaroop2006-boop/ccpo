@@ -1,0 +1,37 @@
+{
+  "id": "golden_syn_waiver_divergence",
+  "purpose": "C.9 Example 5 (fee waiver with scoped exclusions): two exclusions pointing in OPPOSITE directions on the same card -- rent earns reward but is excluded from the waiver count, fuel counts toward the waiver but earns no reward at all. Demonstrates that the reward view and the waiver view of 'total spend' are genuinely different populations, not just the same total minus a flat carve-out.",
+  "card": "syn_waiver",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "note": "All three tickets (700, 30000, 1500) are integer rupee amounts, so ticket*1% always lands on an exact multiple of Rs0.01 -- zero floor loss anywhere reward is actually computed, no rounding_estimated flag expected."
+  },
+  "spend_annual": {
+    "grocery": 120000,
+    "rent": 300000,
+    "fuel": 96000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Stage 2 (eligibility): rent_no_waiver (categories=[rent], excluded_from=[fee_waiver]) removes rent from the WAIVER view only -- rent stays in the reward view. fuel_no_rewards (categories=[fuel], excluded_from=[rewards]) removes fuel from the REWARD view only -- fuel stays in the waiver view. Grocery is untouched by either exclusion.",
+    "Reward view = grocery + rent (fuel excluded) = 1,20,000 + 3,00,000 = Rs4,20,000. Waiver view = grocery + fuel (rent excluded) = 1,20,000 + 96,000 = Rs2,16,000.",
+    "Stage 3 (match): the card's only earning rule, base (selector={}), matches every reward-view segment (grocery, rent) -- fuel never reaches Stage 3 at all, having been excluded from rewards at Stage 2.",
+    "Stage 4 (accrue): percentage 1%, floor_paise_per_txn. All tickets are integer rupees so ea = rate exactly, zero floor loss. Annual gross = 4,20,000 * 0.01 = Rs4,200.00 (cashback_inr, single route, ratio 1.0).",
+    "Stage 5 (cap): no caps on this card -> no-op.",
+    "Stage 6-7 (threshold): waiver basis = waiver-view spend = Rs2,16,000, which is BELOW the Rs3,00,000 tier -- despite reward-view spend (Rs4,20,000) and even raw total spend (Rs5,16,000) both clearing Rs3,00,000 comfortably. The exclusion, not the raw total, decides this -> fee NOT waived. This divergence is the golden's whole point.",
+    "Fees: joining_fee=999, annual_fee=999, not waived -> charged_annual=999. steady_fee = 999*1.18 = Rs1,178.82. year1_fee = (999+999)*1.18 = 1,998*1.18 = Rs2,357.64.",
+    "NACV steady-state = 4,200.00 (GR) - 1,178.82 (fee) = Rs3,021.18.",
+    "NACV Year-1 = 4,200.00 - 2,357.64 (fee) = Rs1,842.36.",
+    "3-year cumulative = 1,842.36 + 2*3,021.18 = 1,842.36 + 6,042.36 = Rs7,884.72."
+  ],
+  "expected": {
+    "gross_reward_value": 4200.00,
+    "waiver_achieved": false,
+    "fee_paid": 1178.82,
+    "nacv_steady_state": 3021.18,
+    "nacv_year_1": 1842.36,
+    "nacv_3yr": 7884.72,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}

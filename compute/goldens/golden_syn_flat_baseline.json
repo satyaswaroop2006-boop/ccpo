@@ -1,0 +1,34 @@
+{
+  "id": "golden_syn_flat_baseline",
+  "purpose": "C.9 Example 1 (flat uncapped cashback): the baseline sanity card -- one uncapped percentage rule, no caps, no thresholds, no exclusions, no fees. Confirms the pipeline produces the plainest possible correct answer (spend * rate) with nothing else in play.",
+  "card": "syn_flat",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "note": "Grocery ticket 700 and dining ticket 600 are both even, so ticket*1.5% lands on an exact multiple of Rs0.01 (700*0.015=10.50, 600*0.015=9.00) -- zero floor loss, no rounding_estimated flag expected."
+  },
+  "spend_annual": {
+    "grocery": 240000,
+    "dining": 120000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Stage 2 (eligibility): no exclusions on this card -> the reward view is the full spend grid, unchanged.",
+    "Stage 3 (match): the card's only earning rule, base (selector={}), matches every segment regardless of category.",
+    "Stage 4 (accrue): percentage 1.5%, floor_paise_per_txn. Both tickets are even so ea = rate exactly, no approximation error. Annual gross = (2,40,000 + 1,20,000) * 0.015 = 3,60,000 * 0.015 = Rs5,400.00 (cashback_inr, single route, ratio 1.0, no primary_route declaration needed).",
+    "Stage 5 (cap): no caps on this card -> no-op.",
+    "Stage 6-7 (thresholds): no thresholds on this card -> threshold_events is empty, waived=False, but annual_fee=0 anyway.",
+    "Fees: joining_fee=0, annual_fee=0 -> steady_fee = 0*1.18 = Rs0.00. year1_fee = (0+0)*1.18 = Rs0.00.",
+    "NACV steady-state = 5,400.00 (GR) - 0 (fee) = Rs5,400.00.",
+    "NACV Year-1 = 5,400.00 - 0 (fee) = Rs5,400.00 (identical -- no fee either year).",
+    "3-year cumulative = 5,400.00 + 2*5,400.00 = Rs16,200.00."
+  ],
+  "expected": {
+    "gross_reward_value": 5400.00,
+    "fee_paid": 0.00,
+    "nacv_steady_state": 5400.00,
+    "nacv_year_1": 5400.00,
+    "nacv_3yr": 16200.00,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}
