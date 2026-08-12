@@ -1,0 +1,36 @@
+{
+  "id": "golden_syn_fuel_surcharge",
+  "purpose": "C.9 Example 10 (fuel card with surcharge + capped refund rule): stacks_with_base (fuel_refund adds on top of base, not instead of it), a monthly reward-measure cap with zero overflow trimming the refund, a fuel surcharge (Stage 10), and a waiver threshold, all together on one card.",
+  "card": "syn_fuel",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "note": "Fuel ticket 1,500 and grocery ticket 700 are both exact multiples of Rs100 at these percentage rates (1500*0.005=7.50, 1500*0.01=15.00, 700*0.005=3.50 -- all terminate at 2dp already), so there is zero paisa floor loss anywhere -- no rounding_estimated flag expected. No exclusions on this card, so waiver-eligible spend is simply all spend."
+  },
+  "spend_annual": {
+    "fuel": 360000,
+    "grocery": 60000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Stage 3 (match): fuel spend matches BOTH base (selector={}) and fuel_refund (categories=[fuel], stacks_with_base=true) -- base binds as the non-stacking winner (fuel_refund isn't in that contest at all), fuel_refund binds alongside it. Grocery spend matches only base.",
+    "Stage 4 (accrue), monthly: fuel base = Rs30,000 * 0.5% = Rs150.00. fuel_refund (uncapped) = Rs30,000 * 1% = Rs300.00. grocery base = Rs5,000 * 0.5% = Rs25.00.",
+    "Stage 5 (cap): cap_refund = Rs250/month on fuel_refund, overflow=zero. Rs300 > Rs250 every month -> capped to Rs250/month, the Rs50/month excess simply discarded.",
+    "Annual gross reward = (150 base-on-fuel + 250 capped-fuel_refund + 25 base-on-grocery) * 12 = 425 * 12 = Rs5,100.00 (cashback_inr, v=1).",
+    "Stage 10 (surcharge): fuel_sur = 1% on fuel, 18% GST on the surcharge itself. SurchargeCost = 0.01 * 1.18 * Rs3,60,000 (annual fuel spend) = Rs4,248.00.",
+    "Stage 6-7 (waiver): waiver-eligible spend = all spend (no exclusions on this card) = 3,60,000+60,000 = Rs4,20,000 >= Rs50,000 -> fee waived. fee_paid = 0 in both Year-1 and steady-state (joining_fee also unset, defaults to 0).",
+    "NACV steady-state = 5,100.00 (GR) - 4,248.00 (surcharge) - 0 (fee) = Rs852.00.",
+    "NACV Year-1 = 5,100.00 - 4,248.00 - 0 = Rs852.00 (identical -- no fee either year).",
+    "3-year cumulative = 852.00 + 2*852.00 = Rs2,556.00."
+  ],
+  "expected": {
+    "gross_reward_value": 5100.00,
+    "surcharge_cost": 4248.00,
+    "waiver_achieved": true,
+    "fee_paid": 0.00,
+    "nacv_steady_state": 852.00,
+    "nacv_year_1": 852.00,
+    "nacv_3yr": 2556.00,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}

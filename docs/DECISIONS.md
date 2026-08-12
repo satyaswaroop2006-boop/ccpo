@@ -796,3 +796,32 @@ cap. Resized UPI grocery to Rs60,000/month (600pts uncapped) specifically
 so the cap trims it to 500pts/month with the 100pts/month excess
 genuinely discarded (overflow="zero", no fallback rate to re-rate it to,
 unlike syn_ecom's base_rate overflow).
+
+---
+
+## 2026-08-12 -- Wire golden_syn_fuel_surcharge.json (C.9 Example 10)
+
+### 49. First golden to exercise Stage 10 surcharges -- adapter gap closed
+
+Same pattern as #46 (exclusions): no prior golden's card had a surcharge,
+so `test_goldens.py` had no `_load_surcharges` at all. Added, reusing
+`_selector_from_dict` directly (Surcharge's selector is the same C.2.1
+type as an earning rule's, no separate `_surcharge_selector_from_dict`
+needed the way exclusions got their own -- eligibility.py's
+`ExclusionSelector` and match.py's `Selector` are separate dataclasses,
+but costs.py's `Surcharge.selector` is typed as match.py's `Selector`
+directly).
+
+### 50. Chosen to stack three previously-separate mechanics deliberately,
+not to keep the golden "clean"
+
+syn_fuel combines `stacks_with_base` (fuel_refund adds onto base rather
+than replacing it -- first golden to exercise stacking), a reward cap that
+actually binds and trims the stacked rule specifically (not the base rule
+it's stacked onto), a surcharge that costs MORE than the reward it's
+levied against generates on its own (Rs4,248 surcharge vs the fuel
+portion's Rs1,800+3,000=Rs4,800 combined reward -- a thin but positive
+margin once grocery's Rs300 is added), and a waiver threshold. The
+resulting NACV (Rs852 steady-state) is a realistic illustration of A.11's
+point that a fuel card's surcharge can eat most of its own reward value --
+not smoothed into a "nicer" number for the golden's sake.

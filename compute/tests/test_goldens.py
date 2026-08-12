@@ -12,9 +12,11 @@ window kind, any scope), spend-measure incremental bands (`tier_mode`
 inferred from rule_group + spend-measure caps, since the raw schema has
 no explicit field -- see `_load_card_rules`), activate_rule
 (requires_activation carried straight from the seed field), Stage 6-7's
-grant-type threshold payloads, Stage 8's currency/route valuation, and
-Stage 9's countable/voucher benefits. It will still need extending for
-surcharges/forex once a golden needs them (none do yet).
+grant-type threshold payloads, Stage 8's currency/route valuation, Stage
+9's countable/voucher benefits, and Stage 10's surcharges
+(`_load_surcharges`). Forex is the only remaining gap (no golden needs it
+yet -- syn_travel's zero-forex card and international-spend rule are
+blocked on the geography selector gap, docs/DECISIONS.md #4).
 
 Need/unit_value/utilisation/friction/primary-route assumptions have no
 home in the card schema at all (they're user/registry inputs, per C.7) --
@@ -29,7 +31,7 @@ from engine.accrue import Accrual, accrue_category_mode
 from engine.assemble import assemble_nacv, value_milestone_grants
 from engine.benefits import Benefit, value_countable_benefit, value_voucher_benefit
 from engine.caps import Cap, Window, apply_caps, apply_incremental_bands
-from engine.costs import compute_fees
+from engine.costs import Surcharge, compute_fees, surcharge_cost
 from engine.eligibility import Exclusion, ExclusionSelector, apply_eligibility
 from engine.match import EarningRule, Selector, match
 from engine.normalise import AssumptionsSnapshot, CategorySpend, NormalisedSpend, SpendInput, normalise
@@ -70,6 +72,17 @@ def _load_exclusions(card_key: str) -> tuple[Exclusion, ...]:
             excluded_from=tuple(e["excluded_from"]), note=e.get("note"),
         )
         for e in card.get("exclusions", [])
+    )
+
+
+def _load_surcharges(card_key: str) -> tuple[Surcharge, ...]:
+    card = next(c for c in CARDS if c["key"] == card_key)
+    return tuple(
+        Surcharge(
+            key=s["key"], selector=_selector_from_dict(s["selector"]),
+            rate=Decimal(str(s["rate"])), gst_on_surcharge=Decimal(str(s["gst_on_surcharge"])),
+        )
+        for s in card.get("surcharges", [])
     )
 
 
@@ -455,6 +468,56 @@ def test_golden_syn_upi_channel():
     nacv = assemble_nacv(
         gross_reward=gross_reward_rupees, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
         steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    assert nacv.three_year == Decimal(str(golden["expected"]["nacv_3yr"]))
+
+
+def test_golden_syn_fuel_surcharge():
+    golden = json.loads((GOLDENS_DIR / "golden_syn_fuel_surcharge.json").read_text())
+    assert golden["card"] == "syn_fuel"
+
+    spend_input = _parse_spend_annual(golden["spend_annual"])
+    normalised = normalise(spend_input, AssumptionsSnapshot())
+    eligible = apply_eligibility(normalised, exclusions=())  # syn_fuel has no exclusions
+
+    earning_rules, accruals, caps = _load_card_rules("syn_fuel")
+    bindings = match(NormalisedSpend(segments=eligible.reward), earning_rules)
+
+    # fuel binds BOTH base (non-stacking winner) and fuel_refund (stacked
+    # alongside it); grocery binds only base.
+    fuel_rule_keys = {b.rule_key for b in bindings if b.segment.category == "fuel"}
+    grocery_rule_keys = {b.rule_key for b in bindings if b.segment.category == "grocery"}
+    assert fuel_rule_keys == {"base", "fuel_refund"}
+    assert grocery_rule_keys == {"base"}
+
+    uncapped = accrue_category_mode(bindings, accruals)
+    final = apply_caps(uncapped, caps, earning_rules, accruals)
+    assert not any(r.flags for r in final)  # zero floor loss anywhere, overflow=zero -> no cap_overflow entries
+
+    gross_reward_value = sum((r.reward for r in final), Decimal("0"))
+    assert gross_reward_value == Decimal(str(golden["expected"]["gross_reward_value"]))  # cashback_inr, v=1
+
+    # Stage 10: surcharge (fuel only) and the waiver threshold.
+    surcharges = _load_surcharges("syn_fuel")
+    assert len(surcharges) == 1
+    cost_of_surcharge = surcharge_cost(eligible.reward, surcharges)
+    assert cost_of_surcharge == Decimal(str(golden["expected"]["surcharge_cost"]))
+
+    thresholds = _load_thresholds("syn_fuel")
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+
+    card = next(c for c in CARDS if c["key"] == "syn_fuel")
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)
+    assert fees.waived == golden["expected"]["waiver_achieved"]
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee, surcharge_cost=cost_of_surcharge,
     )
     assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
     assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
