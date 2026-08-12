@@ -120,10 +120,24 @@ def accrue_transactions(accrual: Accrual, amounts: Sequence[Decimal]) -> Decimal
     return sum((accrue_transaction(accrual, a) for a in amounts), Decimal("0"))
 
 
+def effective_rate(accrual: Accrual, ticket_size: Decimal) -> Decimal:
+    """Part A SS A.2's ê(c,k): the ticket-size-approximated planning rate
+    (reward units per rupee), evaluated once at `ticket_size` rather than
+    per real transaction. This is `_ticket_approx_reward`'s per-rupee rate,
+    promoted to a standalone function (docs/DECISIONS.md's #15 precedent --
+    promote a private stage helper when a later stage needs it) for
+    `optimiser/allocate.py`'s segment compilation, which needs the rate on
+    its own, not multiplied through a segment's amount. Distinct from
+    `caps.py::flat_rate`, which is the evaluator-exact continuous rate used
+    for spend-domain breakpoint conversion -- a different purpose (exact
+    threshold crossings) that must NOT be conflated with the optimiser's
+    approximated planning rate."""
+    per_txn_at_ticket = accrue_transaction(accrual, ticket_size)
+    return per_txn_at_ticket / ticket_size
+
+
 def _ticket_approx_reward(accrual: Accrual, segment: SpendSegment) -> Decimal:
-    per_txn_at_ticket = accrue_transaction(accrual, segment.ticket_size)
-    rate = per_txn_at_ticket / segment.ticket_size
-    return rate * segment.amount
+    return effective_rate(accrual, segment.ticket_size) * segment.amount
 
 
 def _unrounded_reward(accrual: Accrual, segment: SpendSegment) -> Decimal:

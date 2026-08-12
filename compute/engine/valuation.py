@@ -117,6 +117,19 @@ def _resolve_primary_route(currency: RewardCurrency, primary_route_key: str | No
     )
 
 
+def primary_route_value_per_point(currency: RewardCurrency, primary_route_key: str | None = None) -> Decimal:
+    """Rupees per point on the currency's declared primary route,
+    unconditionally -- deliberately ignores `min_points` eligibility
+    (that gate is Stage 8's concern for a specific *realized* point total,
+    e.g. `value_currency`'s `min_points_not_met` flag; the optimiser's
+    planning rate needs the route's per-point value on its own, not zeroed
+    out just because a probe amount happens to fall under a transfer
+    route's minimum). Used by `optimiser/allocate.py` to convert `engine.
+    accrue.effective_rate`'s points/₹ into a rupee segment rate."""
+    route = _resolve_primary_route(currency, primary_route_key)
+    return _route_value_per_point(route)
+
+
 def value_currency(currency: RewardCurrency, points: Decimal, primary_route_key: str | None = None) -> CurrencyValuation:
     for route in currency.routes:
         _validate_route(route)

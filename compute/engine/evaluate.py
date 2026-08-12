@@ -78,7 +78,7 @@ class EvaluateResult:
     flags: tuple[str, ...]
 
 
-def _assumptions_snapshot(assumptions: EvaluateAssumptions) -> AssumptionsSnapshot:
+def assumptions_snapshot_from(assumptions: EvaluateAssumptions) -> AssumptionsSnapshot:
     ticket_sizes = dict(DEFAULT_TICKET_SIZES)
     ticket_sizes.update(assumptions.ticket_sizes)
     upi_category_mix = dict(DEFAULT_UPI_CATEGORY_MIX)
@@ -95,7 +95,7 @@ def evaluate_card(
     assumptions = assumptions or EvaluateAssumptions()
 
     # Stage 1
-    normalised = normalise(spend, _assumptions_snapshot(assumptions))
+    normalised = normalise(spend, assumptions_snapshot_from(assumptions))
     # Stage 2
     eligible = apply_eligibility(normalised, bundle.exclusions)
 

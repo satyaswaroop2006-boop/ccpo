@@ -5,16 +5,17 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (commit 5301d3c -- PostgresCardRepository live-wired)
+## Status as of 2026-08-12 (Phase 4 slice 1 -- optimiser/allocate.py)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
 177/177 tests green, 12/12 synthetic cards have a passing golden -- full
 C.9 coverage. Phase 3 complete end-to-end: `engine/evaluate.py`'s
 `evaluate_card` orchestrator, `POST /evaluate` and `POST /next-best-spend`
-wired in `app/main.py`, now live-backed by `PostgresCardRepository` when
-`DATABASE_URL` is configured (#64, resolved below) -- 214/214 tests green.
-No blocking deferrals -- 8 non-blocking items remain open (table below);
-none of them gate this work or starting Phase 4.
+wired in `app/main.py`, live-backed by `PostgresCardRepository`. Phase 4
+started: `optimiser/allocate.py` -- the inner MILP for a fixed card
+subset (Part B SS B.2-B.4, Part E SS E.4), continuous-variables-only this
+slice (#68 below) -- 219/219 tests green. No blocking deferrals -- 9
+non-blocking items remain open (table below); none of them gate this work.
 
 **Genuinely open items** (none blocking today's work; listed so a future
 session doesn't have to scan all entries below to find them):
@@ -29,6 +30,7 @@ session doesn't have to scan all entries below to find them):
 | #27 | Explanation trace is a flat line-item list | Not C.10's full per-node schema (`cap_state`, per-currency `v`/`phi`, `source_refs`) — a real fidelity gap, flagged for a follow-up pass if §37/§74 need it soon |
 | #29 | `WelcomeValue` has no real fixture | Parameter exists in `assemble_nacv`, always 0 in practice — no card/schema payload type for welcome bonuses |
 | #10, #61 | True anniversary alignment; wallet mid-year state (`current_year_progress`) | Approximated as calendar-aligned; needs `card_anniversary_month` AND a way to seed already-triggered threshold/cap state, neither built (wallet mode itself doesn't exist yet) |
+| #68 | `optimiser/allocate.py`: milestones/waiver/fees/benefit-dedup/card-selection/incremental-tier/rule_group-and-card-scoped-caps/quarterly-and-annual-reward-caps | This slice is continuous-variables-only (B.2's `x`,`s`); every binary-needing mechanic and every cap shape beyond scope="rule"+monthly-window is the explicit next increment, not silently dropped -- see #70 |
 | — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
 
 **Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
@@ -37,7 +39,8 @@ fill-order for `rule`-scope bands (#9, resolved #41-45, #45-update),
 geography-aware selectors (#4, resolved #51-54), `PV` = NACV for a single
 card, not a separate output (#28), `CategorySpend.merchant_group` input
 path (#5, resolved #55-56), `condition: "on_renewal"` year-mode filtering
-(#14, resolved #59-60). All 12/12 synthetic cards now have a golden.
+(#14, resolved #59-60), `PostgresCardRepository` built/verified/live-wired
+(#62/#64, resolved #65-67). All 12/12 synthetic cards now have a golden.
 `/evaluate` + `/next-best-spend` MVP scope confirmed with Satya (#63):
 synthetic-catalog-backed for now, annual marginal-delta (not wallet
 mid-year) for Next-Best-Spend. `PostgresCardRepository` built and verified
@@ -1383,3 +1386,130 @@ not the synthetic catalog, confirming the switch actually took effect and
 not just that the code compiles. 214/214 tests green, same count as
 before (the fix reshuffled which repository each suite exercises, added
 no new test files).
+
+---
+
+## 2026-08-12 -- Phase 4 slice 1: `optimiser/allocate.py`, the inner MILP
+for a fixed card subset (Part B SS B.2-B.4, Part E SS E.4)
+
+### 68. Scope split confirmed with Satya: `allocate.py` alone this pass,
+not all 8 of Part E SS E.0's optimiser modules
+
+Part E lists 8 new modules (`candidates.py`, `enumerate.py`,
+`allocate.py`, `repair.py`, `frontier.py`, `classify.py`, `scenarios.py`,
+`explain.py`). `allocate.py` is the true dependency root -- `candidates.
+py`'s standalone-value pre-filter and `enumerate.py`'s per-subset solve
+both call it directly, `repair.py` consumes its output alongside `engine.
+evaluate.evaluate_card` -- the same role `engine/accrue.py` played inside
+Phase 2's stage-by-stage build. Confirmed roadmap for the remaining 7,
+build order: `repair.py` -> `enumerate.py` -> `candidates.py` ->
+`frontier.py` + `classify.py` -> `scenarios.py` -> `explain.py` +
+`/optimise`.
+
+This slice builds continuous variables only (B.2's `x(c,k,t)`, `s(c,q,t)`)
+for a subset the CALLER supplies (no card-selection binary `y` -- B.6/E.4's
+own "y removed" framing for the inner problem) plus the always-available
+outside option `c0` (A.11). Concave capped/accelerated curves (B.5) are
+the one nonlinearity a plain LP already handles correctly by construction
+(a maximising LP fills the higher-rate segment first automatically).
+Everything needing a binary -- milestones `z`, waiver `w`, fees, benefit
+dedup `l`, cardinality/user-constraints, and B.5's convex incremental-tier
+fill-order binaries -- is the explicit next increment, same "deliberately
+narrow first" posture as `caps.py`'s own initial build (#6).
+
+### 69. `k` generalised to (category, channel, geography, merchant_group);
+ê (planning rate) kept distinct from `caps.py::flat_rate` (evaluator-exact rate)
+
+Part A/B's notation treats `k` as a single "spend category" dimension, but
+Part C's rules already differentiate on channel/geography/merchant_group
+too (`syn_upi`'s `channels=[upi]` rule, `syn_points`'s `merchant_groups=
+[synth_portal]` rule) -- modelling `k` as literally just category would
+under-represent rules the engine already supports and goldens already
+exercise. `allocate.py`'s `SpendKey` generalises `k` to the full tuple,
+matching `engine.normalise.SpendSegment`'s own identity exactly.
+
+Promoted two private stage helpers to public, same "promote when a later
+stage needs it" move as `window_instances`/`window_flags` (#15):
+`engine.accrue.effective_rate(accrual, ticket_size)` (Part A.2's ê,
+refactored out of `_ticket_approx_reward`, no behaviour change -- existing
+accrue tests pass unchanged) and `engine.valuation.
+primary_route_value_per_point(currency, primary_route_key)` (deliberately
+bypasses the `min_points` eligibility gate `value_currency` applies for a
+*specific* realized point total -- the optimiser's planning rate needs a
+route's per-point value unconditionally, not zeroed out because a probe
+amount happens to fall under a transfer route's minimum). Also promoted
+`engine.evaluate._assumptions_snapshot` to `assumptions_snapshot_from`,
+now shared between `evaluate_card` and `allocate` rather than duplicated.
+
+`ê` is deliberately NOT `caps.py::flat_rate` (the evaluator-exact
+continuous rate `breakpoints.py` uses for spend-domain threshold
+conversion -- a different purpose, exact crossings, not approximated
+planning value). Cap width for a capped segment is `Cap.amount / ê`, using
+the SAME ê as the segment's own rate -- self-consistent (`ê × width =
+Cap.amount` exactly at the boundary), which mixing in `flat_rate` would
+break.
+
+### 70. Segment compilation reuses Stages 1-3 wholesale; three scope
+restrictions this pass, each raised rather than silently mismodelled
+
+Key design choice: which rules bind to a given (category, channel,
+geography, merchant_group) doesn't depend on how much is allocated there
+(rule selection is selector/priority-based, not amount-based), so
+`_compile_card_pools` runs the REAL `normalise -> apply_eligibility ->
+match` pipeline per candidate card (as if its full declared demand were
+routed there) rather than re-deriving winner-takes-all/stacking
+resolution -- the only way this module can't silently diverge from the
+evaluator's own interpretation of a card's rules. A stacking rule and the
+non-stacking winner are independent segment pools that both reference the
+same `x(c,k,t)` (B.4(3)'s "per rule-group" framing), not one shared pool.
+
+`overflow: base_rate`'s fallback rate is found the same way `caps.py::
+_apply_one_cap` finds it (`match_segment` against rules outside the cap's
+pool, take the non-stacked winner) -- replicated rather than imported
+since this pass only supports `scope="rule"` pools (pool = `{cap.rule_key}`
+trivially), not `caps.py`'s general `_scope_rule_keys` resolution.
+
+Three restrictions raise a clear `ValueError` rather than being silently
+mismodelled, none of which exclude anything in the current 12-card
+catalog: reward caps with `scope` other than `"rule"` (`rule_group`/`card`
+pooling -- `cap.py`'s `_scope_rule_keys` would need promoting, deferred to
+whichever increment first needs it); reward caps on non-monthly windows
+(quarterly/annual caps need a segment variable pooled across months this
+slice doesn't build -- every reward-measure cap in the seed catalog
+happens to be monthly today); `tier_mode="incremental"` rules (`syn_slab`
+-- B.5's convex PWL case needs fill-order binaries).
+
+### Verification -- three hand-computed scenarios (`tests/
+test_allocate.py`), all correct on the first real solve, no debugging needed
+
+1. Single card (`syn_ecom`, the SAME spend as `golden_syn_ecom_basic.
+   json`) -- `reward_value` = ₹14,400.00, byte-for-byte the golden's
+   evaluator-verified number. No allocation decision is being made here
+   (one card, all demand forced there); this proves segment/rate/cap-width
+   compilation is correct on its own.
+2. Two cards (`syn_ecom` + `syn_flat`), ₹6,00,000/yr ecommerce/online --
+   B.5's "concave curve fills the higher rate first" put to a real
+   cross-card test: ₹20,000/mo fills `syn_ecom`'s capped 5% segment
+   (₹12,000/yr) exactly, the remaining ₹30,000/mo correctly routes to
+   `syn_flat`'s flat 1.5% (₹5,400/yr) rather than `syn_ecom`'s own 1%
+   overflow -- total ₹17,400.00/yr, matching the hand computation exactly.
+3. Outside option (`syn_fuel`, ₹6,00,000/yr fuel spend, double the
+   ₹25,000/mo cap-equivalent width) -- confirms A.11's claim ("the
+   optimiser routes surcharge-negative spend away from cards
+   automatically") is actually true of this implementation, not just spec
+   prose: exactly ₹3,00,000/yr routes to `syn_fuel` (the positive-margin
+   portion, net +0.32%/rupee) and ₹3,00,000/yr routes to `c0` (the
+   overflow portion once `fuel_refund`'s cap binds, net -0.68%/rupee) --
+   `pv_planned` = ₹960.00/yr, matching the hand computation exactly.
+
+Plus a forced-CBC-fallback test (same answer as HiGHS) and a
+`tier_mode="incremental"` `ValueError` test. `PULP_CBC_CMD` kept over its
+suggested replacement `COIN_CMD` after verifying directly in this
+environment that `COIN_CMD` can't locate `cbc.exe` (`PulpSolverError`)
+while `PULP_CBC_CMD` works -- a deprecation warning is an acceptable
+trade for a fallback path that's actually verified to run, not merely
+assumed to. `pulp.LpVariable(...)` direct construction (also deprecated)
+switched to `prob.add_variable(...)` throughout, eliminating 324 of 325
+deprecation warnings the first draft produced.
+
+219/219 tests green (214 prior + 5 new).
