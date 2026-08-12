@@ -103,13 +103,23 @@ decision in `docs/DECISIONS.md` (create on first use).
       `buffer(β)`, keeping the exact-verified best. Near-miss only, not
       "barely-made" (already handled by the LP's own segment structure —
       #71/#72); top-up sourced from `c0` only, full-cover-or-nothing.
-      223/223 tests green.
-      **Remaining build order** (#68): `optimiser/enumerate.py` (E.3,
-      subset generation, calling `allocate` + `repair` per subset) →
-      `optimiser/candidates.py` (E.2, pre-filtering) →
-      `optimiser/frontier.py` + `optimiser/classify.py` (E.8–E.9) →
-      `optimiser/scenarios.py` (E.11) → `optimiser/explain.py` (E.12) +
-      `POST /optimise`.
+      **Slice 3 done**: `optimiser/enumerate.py` (E.3, subset generation)
+      — pure orchestration over slices 1-2 (`itertools.combinations` +
+      `allocate` + `repair` per subset), no new financial logic.
+      `cardinality_mode` matches Part D's own vocabulary (`exactly`/
+      `up_to`/`optimiser_decides`); `subset_key` matches
+      `portfolio_subset_results`'s documented convention (sorted card
+      keys, `+`-joined). Full-sweep only — no wallet-mode inclusion, no
+      infeasibility filtering, no bound pruning, no caching, no
+      parallelism (#73/#74, each blocked on machinery a later slice
+      builds, not forgotten). Verified: `{syn_ecom, syn_flat}` enumerates
+      exactly the 3 expected subsets, each cross-checked against slice 1's
+      own hand-computed numbers, best-of-three correctly matches the
+      2-card subset. 227/227 tests green.
+      **Remaining build order** (#68): `optimiser/candidates.py` (E.2,
+      pre-filtering) → `optimiser/frontier.py` + `optimiser/classify.py`
+      (E.8–E.9) → `optimiser/scenarios.py` (E.11) →
+      `optimiser/explain.py` (E.12) + `POST /optimise`.
 - [ ] Phase 5 — real card ingestion (Part I workflow)
 - [ ] Phase 6 — frontend (Part F, to be authored)
 

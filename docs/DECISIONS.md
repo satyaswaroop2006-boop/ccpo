@@ -5,7 +5,7 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (Phase 4 slice 2 -- optimiser/repair.py)
+## Status as of 2026-08-12 (Phase 4 slice 3 -- optimiser/enumerate.py)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
 177/177 tests green, 12/12 synthetic cards have a passing golden -- full
@@ -14,9 +14,9 @@ C.9 coverage. Phase 3 complete end-to-end: `engine/evaluate.py`'s
 wired in `app/main.py`, live-backed by `PostgresCardRepository`. Phase 4
 in progress: `optimiser/allocate.py` (slice 1, the inner MILP for a fixed
 card subset) + `optimiser/repair.py` (slice 2, exact evaluation +
-near-miss threshold repair) -- 223/223 tests green. No blocking deferrals
--- 10 non-blocking items remain open (table below); none of them gate
-this work.
+near-miss threshold repair) + `optimiser/enumerate.py` (slice 3, subset
+generation over both) -- 227/227 tests green. No blocking deferrals -- 11
+non-blocking items remain open (table below); none of them gate this work.
 
 **Genuinely open items** (none blocking today's work; listed so a future
 session doesn't have to scan all entries below to find them):
@@ -33,6 +33,7 @@ session doesn't have to scan all entries below to find them):
 | #10, #61 | True anniversary alignment; wallet mid-year state (`current_year_progress`) | Approximated as calendar-aligned; needs `card_anniversary_month` AND a way to seed already-triggered threshold/cap state, neither built (wallet mode itself doesn't exist yet) |
 | #68 | `optimiser/allocate.py`: milestones/waiver/fees/benefit-dedup/card-selection/incremental-tier/rule_group-and-card-scoped-caps/quarterly-and-annual-reward-caps | This slice is continuous-variables-only (B.2's `x`,`s`); every binary-needing mechanic and every cap shape beyond scope="rule"+monthly-window is the explicit next increment, not silently dropped -- see #70 |
 | #71 | `optimiser/repair.py`: no "barely-made" variants, no cap breakpoints, top-up sourced from `c0` only | Each is a real design surface deferred, not an oversight -- barely-made needs a cost model for what a card's excess spend gives up elsewhere; cap breakpoints are already optimal by construction in `allocate.py`'s LP; pulling top-up from a real card (not just `c0`) needs the same cost model barely-made does -- see #72 |
+| #73 | `optimiser/enumerate.py`: no wallet-mode inclusion, no infeasibility filtering, no bound pruning, no caching, no parallelism | Full-sweep only this slice -- wallet mode and user-constraint machinery (must-keep/refuse/fee-budget) don't exist anywhere yet; bound pruning needs SS E.2's MABC ceiling (not built) and is explicitly a scale optimisation the spec says is irrelevant below the current <=12-card catalog; caching needs DB persistence nothing writes yet -- see #74 |
 | — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
 
 **Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
@@ -1615,3 +1616,65 @@ through `evaluate_allocation` reproduces `golden_syn_ecom_basic.json`'s
 itself is correct, not just `allocate()`'s internal accounting.
 
 223/223 tests green (219 prior + 4 new).
+
+---
+
+## 2026-08-12 -- Phase 4 slice 3: `optimiser/enumerate.py`, subset
+generation (Part E SS E.3)
+
+### 74. Full-sweep enumeration only; five follow-up concerns named and
+deferred rather than half-built
+
+`enumerate.py` is pure orchestration over slices 1-2 (`itertools.
+combinations` + `allocate` + `repair` per subset) -- no new financial
+logic (CLAUDE.md rule 1). Five things SS E.3 describes are deliberately
+not attempted this pass, each because the machinery it would sit on top
+of doesn't exist yet, not because they were forgotten:
+
+- **Wallet mode's mandatory current-portfolio inclusion.** Wallet mode
+  itself doesn't exist (#10/#61) -- greenfield enumeration only.
+- **Structural infeasibility filtering** (fee budget on unwaivable fees,
+  network requirements, must-keep/refuse-use). Part B SS B.4(8)'s
+  user-rule constraints aren't modelled anywhere -- `allocate.py` takes a
+  subset as a given input, no `y`/constraint machinery exists to check
+  against. Every subset is tried.
+- **Bound pruning** (`UB(S) = SUM(BestCaseNACV(c)) - fees`, skip when
+  `< 0.9 * best_exact_so_far`). Needs a MABC-style per-card ceiling (SS
+  E.2's job, not built) -- and the spec itself frames this as a scale
+  optimisation ("exists for the day the candidate cap rises... never
+  prunes anything within 10% of the lead"), irrelevant at today's <=12
+  synthetic cards. Full-sweep (no pruning) is already a spec-sanctioned
+  mode on its own, not a workaround.
+- **Caching** (`subset_key + spend hash + rule versions + assumptions
+  version`). Needs `portfolio_subset_results` persistence, which needs
+  `DATABASE_URL`-backed writes nothing currently does (same blocker
+  `evaluation_runs`/`evaluation_traces` persistence has, #62's entry).
+- **Parallelism.** A performance concern, not correctness; sequential is
+  fine at today's candidate-set sizes.
+
+`cardinality_mode` validated against the exact three-value vocabulary
+`supabase/migrations/0001_init.sql`'s `optimisation_runs` table already
+uses (`'exactly' | 'up_to' | 'optimiser_decides'`) rather than inventing
+a parallel one, and `subset_key` built the same way
+(`portfolio_subset_results.subset_key`'s documented convention: sorted
+card keys, `"+"`-joined) -- so a future DB-writing pass can adopt this
+module's output directly, no format translation needed.
+
+### Verification
+
+`tests/test_enumerate.py`, `{syn_ecom, syn_flat}` (the same two cards and
+spend as `tests/test_allocate.py`'s own scenario 2, Rs6,00,000/yr
+ecommerce/online): `up_to` with `max_cards=2` produces exactly the 3
+expected subsets (`C(2,1)+C(2,2)`), each cross-checked -- `{syn_ecom}`
+alone hand-computes to Rs15,600.00/yr (no `syn_flat` alternative this
+time, so the Rs30,000/mo overflow past the cap re-rates to syn_ecom's own
+1% base rather than diverting anywhere), `{syn_flat}` alone to
+Rs9,000.00/yr (flat 1.5%, no fee), and the 2-card subset reproduces slice
+1's own Rs17,400.00/yr exactly via the enumeration path -- confirming it
+really is the best of the three, setting up cleanly for `frontier.py`
+later without building it now. `"exactly"` mode with `max_cards=1`
+correctly returns only the two size-1 subsets, no pair. An unknown
+`cardinality_mode` raises, matching the engine's existing posture on
+unknown vocabulary elsewhere.
+
+227/227 tests green (223 prior + 4 new).
