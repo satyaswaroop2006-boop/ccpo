@@ -7,12 +7,14 @@ The seed->engine adapter below (`_load_card_rules`/`_load_thresholds`/
 seeds/synthetic_cards.py so goldens test the same rule data that gets
 seeded into the database. It currently handles percentage/per_unit
 accruals, category/channel/merchant_group selectors, Stage 5's full
-reward-measure cap support (any window kind, any scope), Stage 6-7's
-grant-type threshold payloads, Stage 8's currency/route valuation, and
-Stage 9's countable/voucher benefits. It will still need extending for
-surcharges/forex once a golden needs them (none do yet), and for
-spend-measure caps / activate_rule once syn_slab's fill-order mechanic and
-Stage 3 activation support are built (see docs/DECISIONS.md).
+reward-measure cap support (any window kind, any scope), spend-measure
+incremental bands (`tier_mode` inferred from rule_group + spend-measure
+caps, since the raw schema has no explicit field -- see
+`_load_card_rules`), activate_rule (requires_activation carried straight
+from the seed field), Stage 6-7's grant-type threshold payloads, Stage 8's
+currency/route valuation, and Stage 9's countable/voucher benefits. It
+will still need extending for surcharges/forex once a golden needs them
+(none do yet).
 
 Need/unit_value/utilisation/friction/primary-route assumptions have no
 home in the card schema at all (they're user/registry inputs, per C.7) --
@@ -26,7 +28,7 @@ from pathlib import Path
 from engine.accrue import Accrual, accrue_category_mode
 from engine.assemble import assemble_nacv, value_milestone_grants
 from engine.benefits import Benefit, value_countable_benefit, value_voucher_benefit
-from engine.caps import Cap, Window, apply_caps
+from engine.caps import Cap, Window, apply_caps, apply_incremental_bands
 from engine.costs import compute_fees
 from engine.eligibility import apply_eligibility
 from engine.match import EarningRule, Selector, match
@@ -62,23 +64,43 @@ def _accrual_from_dict(d: dict, currency: str) -> Accrual:
 
 
 def _load_card_rules(card_key: str):
+    """Returns (earning_rules, accruals, caps) -- `caps` mixes reward- and
+    spend-measure caps; callers filter by `.measure` for whichever
+    downstream function (apply_caps vs apply_incremental_bands) they need."""
     card = next(c for c in CARDS if c["key"] == card_key)
+    cap_defs = {c["key"]: c for c in card.get("caps", [])}
+
+    # The raw seed schema has no tier_mode field at all (not even a
+    # seed.py INSERT column) -- syn_slab's incremental rules are only
+    # identifiable by their rule_group containing a spend-measure cap
+    # SOMEWHERE in it (slab3 itself is uncapped, but shares rule_group
+    # "slab" with slab1/slab2, which are). Inferred here rather than
+    # trusting an explicit field that doesn't exist yet.
+    incremental_groups = set()
+    for er in card["earning_rules"]:
+        group = er.get("rule_group")
+        if group is None:
+            continue
+        for cap_key in er.get("caps", []):
+            if cap_defs[cap_key]["measure"] == "spend":
+                incremental_groups.add(group)
 
     earning_rules = []
     accruals: dict[str, Accrual] = {}
     for er in card["earning_rules"]:
         selector = _selector_from_dict(er.get("selector", {}))
+        group = er.get("rule_group")
         earning_rules.append(EarningRule(
             key=er["key"], selector=selector,
             priority=er.get("priority", 10), stacks_with_base=er.get("stacks_with_base", False),
-            rule_group=er.get("rule_group"), requires_activation=er.get("requires_activation", False),
+            rule_group=group, requires_activation=er.get("requires_activation", False),
+            tier_mode="incremental" if group in incremental_groups else None,
         ))
         # seed.py itself stamps accrual["currency"] = card["currency"] before
         # inserting (the raw fixture dicts always carry currency: None) --
         # mirrored here so the golden adapter matches what actually gets seeded.
         accruals[er["key"]] = _accrual_from_dict(er["accrual"], card["currency"])
 
-    cap_defs = {c["key"]: c for c in card.get("caps", [])}
     caps = []
     for er in card["earning_rules"]:
         for cap_key in er.get("caps", []):
@@ -310,6 +332,48 @@ def test_golden_syn_lounge_quarterly_gate():
 
     nacv = assemble_nacv(
         gross_reward=gross_reward_rupees, milestone_value=milestone_value, benefit_value=benefit_valuation.value_rupees,
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    assert nacv.three_year == Decimal(str(golden["expected"]["nacv_3yr"]))
+
+
+def test_golden_syn_slab_bands():
+    golden = json.loads((GOLDENS_DIR / "golden_syn_slab_bands.json").read_text())
+    assert golden["card"] == "syn_slab"
+
+    spend_input = _parse_spend_annual(golden["spend_annual"])
+    normalised = normalise(spend_input, AssumptionsSnapshot())
+    eligible = apply_eligibility(normalised, exclusions=())  # syn_slab has no exclusions
+
+    earning_rules, accruals, all_caps = _load_card_rules("syn_slab")
+    assert {r.tier_mode for r in earning_rules} == {"incremental"}  # all three slabs inferred correctly
+
+    # Ordinary Stage 3 matching produces nothing -- every rule is
+    # tier_mode="incremental", so this card's entire reward comes from
+    # apply_incremental_bands below.
+    bindings = match(NormalisedSpend(segments=eligible.reward), earning_rules)
+    assert bindings == ()
+
+    spend_caps = tuple(c for c in all_caps if c.measure == "spend")
+    band_results = apply_incremental_bands(eligible.reward, earning_rules, spend_caps, accruals)
+    gross_reward_value = sum((r.reward for r in band_results), Decimal("0"))
+    assert gross_reward_value == Decimal(str(golden["expected"]["gross_reward_value"]))
+    assert not any(r.flags for r in band_results)  # never estimated -- see the golden's own note
+
+    thresholds = _load_thresholds("syn_slab")
+    assert thresholds == ()  # this card has none
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+
+    card = next(c for c in CARDS if c["key"] == "syn_slab")
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
         steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
     )
     assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))

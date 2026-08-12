@@ -1,0 +1,35 @@
+{
+  "id": "golden_syn_slab_bands",
+  "purpose": "C.9 Example 7 (incremental slab tiers via spend-measure caps): annual spend crosses all three bands (0-1L @1%, 1-3L @2%, >3L @3%), exercising apply_incremental_bands' fill-order allocation end to end. No thresholds, no fee, no waiver on this card.",
+  "card": "syn_slab",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "note": "All three slab rules have an empty selector (match every category) and rate 0.01/0.02/0.03 on a whole-rupee spend split (100,000 / 200,000 / remainder), so every band's reward is an exact multiple of a rupee -- zero paisa rounding anywhere, no rounding_estimated flag possible since apply_incremental_bands never runs the ticket-size approximation path at all (it treats each band's pooled spend as one aggregate amount, not an estimate). Because the window is anniversary_year (the whole year pooled into one instance), the month-by-month spend distribution is irrelevant to the band split -- only the annual total matters. Rs0 annual fee, no waiver threshold -- NACV steady-state and Year-1 are identical."
+  },
+  "spend_annual": {
+    "grocery": 500000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Annual pooled spend (selector={} matches every category, so all Rs5,00,000 of grocery spend counts): Rs5,00,000.",
+    "Fill order = descending priority: slab1 (priority 30, cap band1=Rs1,00,000) > slab2 (priority 20, cap band2=Rs2,00,000) > slab3 (priority 10, uncapped).",
+    "Band 1 (slab1): min(5,00,000, 1,00,000) = 1,00,000 spend @ 1% = Rs1,000. Remaining = 4,00,000.",
+    "Band 2 (slab2): min(4,00,000, 2,00,000) = 2,00,000 spend @ 2% = Rs4,000. Remaining = 2,00,000.",
+    "Band 3 (slab3, uncapped): all remaining 2,00,000 spend @ 3% = Rs6,000. Remaining = 0.",
+    "Gross reward = 1,000 + 4,000 + 6,000 = Rs11,000 (cashback_inr, v=1).",
+    "No thresholds on this card -> milestone_value = 0. No benefits -> benefit_value = 0.",
+    "Annual fee = Rs0, no waiver threshold -> fee_paid = 0 in both Year-1 and steady-state (joining_fee also defaults to 0, unset in the fixture).",
+    "NACV steady-state = 11,000 - 0 = 11,000. NACV Year-1 = 11,000 - 0 = 11,000 (identical, no fee at all).",
+    "3-year cumulative = 11,000 + 2*11,000 = 33,000."
+  ],
+  "expected": {
+    "gross_reward_value": 11000.00,
+    "milestone_value": 0.00,
+    "fee_paid": 0.00,
+    "nacv_steady_state": 11000.00,
+    "nacv_year_1": 11000.00,
+    "nacv_3yr": 33000.00,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}

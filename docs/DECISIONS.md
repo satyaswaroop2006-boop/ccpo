@@ -747,10 +747,16 @@ synthetic category is used instead (parallel to caps.py's own synthetic
 overflow segments), tagged with the window's last month. Separately: the
 raw seed schema has NO `tier_mode` field at all (not even a `seed.py`
 INSERT column) -- syn_slab's rules are only identifiable as incremental by
-their rule_group sharing spend-measure caps, a heuristic inference the
-golden adapter doesn't attempt. A JSON-driven golden for syn_slab is
-therefore deferred (same posture as activate_rule's rollout, which also
-stuck to direct engine-level tests -- test_rule_activations.py -- rather
-than adding a golden); the 12 unit tests in test_incremental_bands.py use
-real fixture data (rules, rates, caps, priorities) but call
-`apply_incremental_bands` directly.
+their rule_group sharing spend-measure caps.
+
+**Update 2026-08-12**: the golden-adapter gap is now closed --
+`_load_card_rules` infers `tier_mode="incremental"` for any rule whose
+`rule_group` contains a spend-measure cap anywhere in it (catches slab3
+too, even though it's itself uncapped, because it shares `rule_group=
+"slab"` with slab1/slab2). `golden_syn_slab_bands.json` wires this
+end-to-end: Rs5,00,000 pooled annual spend -> band1 Rs1,000 + band2
+Rs4,000 + band3 Rs6,000 = Rs11,000 gross, Rs0 fee (this card has none),
+NACV steady-state = Year-1 = Rs11,000, 3yr = Rs33,000. Passed on the first
+run against the same hand computation as `test_incremental_bands.py`'s
+direct-call tests -- good confirmation the two paths (direct engine call
+vs. full JSON-driven pipeline) agree.
