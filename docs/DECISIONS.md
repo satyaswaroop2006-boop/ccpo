@@ -594,3 +594,84 @@ facts. Added as structured sibling keys alongside the existing free-text
 `note`, read directly by the test rather than defaulted anywhere -- same
 "caller supplies, engine never invents" posture as Stage 8/9's own
 utilisation/friction parameters.
+
+---
+
+## 2026-08-12 -- activate_rule payloads (Part C SS C.3), superseding #13
+
+### 36. `requires_activation` lives on match.py's EarningRule, gated at match time
+
+The gap flagged in #13 -- Stage 3 had no concept of a rule that only
+matches once a threshold fires -- is now closed. `EarningRule` gained
+`requires_activation: bool = False`; `match_segment`/`match` gained an
+`active_rule_keys: frozenset[str] = frozenset()` parameter and now filter
+`eligible = [r for r in earning_rules if not r.requires_activation or r.key
+in active_rule_keys]` before matching. Default empty set means passing a
+card's FULL rule list (activation-gated rules included) to an ordinary
+Stage 3 call is always safe -- a dormant rule can never accidentally win a
+segment. Backward compatible: all 139 pre-existing tests passed unchanged
+after this change, since no existing fixture ever set
+`requires_activation=True`. `thresholds.py` is the only caller that ever
+passes a non-empty `active_rule_keys`.
+
+### 37. Prospective activation excludes the crossing month itself
+
+C.4's "rate unlocks apply from crossing month onward" doesn't say whether
+"onward" includes the crossing month. Implemented as EXCLUSIVE (active
+months = strictly after the crossing month) for two reasons: (1) the
+engine has no intra-month transaction timing, so by the time a month's
+cumulative total is known to have crossed the threshold, that month's
+spend has already been fully accrued at the old rate -- backdating into it
+would need information the engine doesn't have; (2) it matches how real
+card programmes typically behave (a tier unlock takes effect from the next
+billing cycle, not retroactively mid-cycle). Consequence, tested directly
+(`test_prospective_activation_crossing_in_final_month_activates_nothing`):
+if the crossing happens in the window's last month, the rule never
+actually activates that year at all -- an edge case worth knowing about,
+not a bug.
+
+### 38. `evaluate_threshold` now computes `crossing_month` for every firing
+tier, not just activate_rule ones
+
+A chronological running-total walk over each window instance's months,
+recording the first month each firing tier's threshold was met. Needed for
+prospective activation timing, but computed universally since it's cheap
+(one pass per window instance) and generally useful for trace/
+explainability regardless of payload type (e.g. "this voucher was earned
+in July") -- consistent with the "flag/store it since a later stage will
+want it" posture already used for cap buffers in breakpoints.py.
+
+### 39. `apply_rule_activations`: segment-identity-based splice, not a full
+re-pipeline run
+
+For each activate_rule event, determines the active months (retroactive:
+the whole window; prospective: strictly after crossing_month per #37),
+finds the reward segments in those months matching the activated rule's
+selector, drops whatever ORIGINALLY bound to each such segment (matched by
+Python object identity -- `is`, not `==` -- since Stage 1/2/3's segment
+references flow through unchanged for any uncapped binding), re-runs
+Stage 3's match_segment with the rule now eligible, and re-runs Stage 4 on
+the new binding. This is a targeted patch over Stage 4/5's output, not a
+full pipeline re-run, which is both cheaper and correctly leaves
+unaffected segments (different months, different categories) untouched.
+
+Two known gaps from relying on identity, both currently unreached because
+no in-scope card combines the two mechanics: (a) caps.py's synthetic
+overflow segments are NEW objects (`dataclasses.replace`), so an
+activation affecting an already-capped rule wouldn't be reconciled
+correctly; (b) per the official C.4 stage order (Stage 5 CAP precedes
+Stage 6-7 THRESHOLDS), `apply_rule_activations` runs AFTER `apply_caps` in
+the intended pipeline, meaning a cap on the newly-activated rule itself
+would need a second capping pass that doesn't exist. Neither syn_retro's
+rate_2/rate_3 nor syn_renewal's dining_2x carry a cap, so this is
+documented as a boundary, not fixed speculatively.
+
+### 40. Golden adapter updated to carry `requires_activation` through
+
+`test_goldens.py`'s `_load_card_rules` now reads `er.get(
+"requires_activation", False)` into `EarningRule`, matching seed.py's own
+schema field, so a future golden for syn_retro or syn_renewal (exercising
+activate_rule end-to-end through the JSON-driven harness, not just direct
+engine-level tests) won't need this fixed retroactively. No existing
+golden currently needs it (syn_ecom/syn_miles/syn_lounge have no
+activation-gated rules).

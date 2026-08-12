@@ -14,6 +14,15 @@ replace-or-lose contest at all: whichever non-stacking rule would otherwise
 win for a segment is bound as usual, and every matching stacking rule binds
 *in addition* to it -- never instead of it.
 
+`requires_activation` rules (accelerated-rate unlocks, C.3's `activate_rule`
+payload type) never match unless the caller explicitly names them active
+via `active_rule_keys` -- the default (empty) excludes them, so passing a
+card's full rule list (activation-gated rules included) to `match`/
+`match_segment` for an ordinary Stage 3 pass is always safe; a dormant
+rule can't accidentally win a segment. Stage 6-7 (thresholds.py) is the
+only caller that ever passes a non-empty `active_rule_keys`, once a
+threshold crossing says a specific rule is active for specific months.
+
 Selector matching covers the fields the grid can carry today: category,
 channel, merchant_group. Other C.2.1 fields (mcc, networks, geography,
 transaction amount, date range) are rejected rather than silently ignored,
@@ -66,6 +75,7 @@ class EarningRule:
     priority: int = 10
     stacks_with_base: bool = False
     rule_group: str | None = None
+    requires_activation: bool = False
 
 
 @dataclass(frozen=True)
@@ -119,11 +129,16 @@ def _resolve_conflict(candidates: list[EarningRule]) -> tuple[EarningRule, bool]
     return top_specificity[0], True
 
 
-def match_segment(segment: SpendSegment, earning_rules: Sequence[EarningRule]) -> tuple[RuleBinding, ...]:
+def match_segment(
+    segment: SpendSegment,
+    earning_rules: Sequence[EarningRule],
+    active_rule_keys: frozenset[str] = frozenset(),
+) -> tuple[RuleBinding, ...]:
     for rule in earning_rules:
         _validate_rule(rule)
 
-    matching = [r for r in earning_rules if _selector_matches(r.selector, segment)]
+    eligible = [r for r in earning_rules if not r.requires_activation or r.key in active_rule_keys]
+    matching = [r for r in eligible if _selector_matches(r.selector, segment)]
     non_stacking = [r for r in matching if not r.stacks_with_base]
     stacking = [r for r in matching if r.stacks_with_base]
 
@@ -137,8 +152,12 @@ def match_segment(segment: SpendSegment, earning_rules: Sequence[EarningRule]) -
     return tuple(bindings)
 
 
-def match(normalised: NormalisedSpend, earning_rules: Sequence[EarningRule]) -> tuple[RuleBinding, ...]:
+def match(
+    normalised: NormalisedSpend,
+    earning_rules: Sequence[EarningRule],
+    active_rule_keys: frozenset[str] = frozenset(),
+) -> tuple[RuleBinding, ...]:
     bindings: list[RuleBinding] = []
     for segment in normalised.segments:
-        bindings.extend(match_segment(segment, earning_rules))
+        bindings.extend(match_segment(segment, earning_rules, active_rule_keys))
     return tuple(bindings)

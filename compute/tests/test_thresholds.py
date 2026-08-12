@@ -191,7 +191,9 @@ def test_on_renewal_condition_carried_through_unfiltered():
 
 
 # ---------------------------------------------------------------------------
-# activate_rule -- out of scope, raises when actually crossed
+# activate_rule -- crossing detection + payload validation (the mechanics of
+# actually *applying* the activation live in test_rule_activations.py,
+# since they need Stage 3/4 too, not just thresholds.py in isolation)
 # ---------------------------------------------------------------------------
 
 SYN_RENEWAL_THRESHOLD = Threshold(
@@ -205,18 +207,62 @@ SYN_RENEWAL_THRESHOLD = Threshold(
 )
 
 
-def test_syn_renewal_activate_rule_tier_raises_when_crossed():
-    # cumulative mode: crossing tier 2 (5L) necessarily also crosses tier 1
-    # (1L, activate_rule) -- correctly surfaces the current limitation
-    # rather than silently skipping the unsupported payload.
-    with pytest.raises(ValueError, match="activate_rule"):
-        evaluate_threshold(SYN_RENEWAL_THRESHOLD, [_seg("grocery", 6, "600000")], waiver_segments=[])
+def test_syn_renewal_crossing_both_tiers_fires_activate_rule_and_grant_points():
+    events = evaluate_threshold(SYN_RENEWAL_THRESHOLD, [_seg("grocery", 6, "600000")], waiver_segments=[])
+    assert _payload_types(events) == ["activate_rule", "grant_points"]
+    activate_event = next(e for e in events if e.payload.type == "activate_rule")
+    assert activate_event.payload.rule == "dining_2x"
+    assert activate_event.payload.application == "prospective"
 
 
 def test_syn_renewal_uncrossed_activate_rule_tier_does_not_block_evaluation():
     # Below even tier 1 -- nothing fires, nothing raises.
     events = evaluate_threshold(SYN_RENEWAL_THRESHOLD, [_seg("grocery", 6, "50000")], waiver_segments=[])
     assert events == ()
+
+
+def test_activate_rule_missing_rule_name_raises():
+    threshold = Threshold(
+        key="bad", basis=ThresholdBasis(measure="milestone_eligible_spend", window=ANNIV),
+        tier_mode="cumulative", tiers=(Tier(1, Decimal("1000"), Payload(type="activate_rule", application="prospective")),),
+    )
+    with pytest.raises(ValueError, match="needs 'rule'"):
+        evaluate_threshold(threshold, [_seg("grocery", 1, "5000")], waiver_segments=[])
+
+
+def test_activate_rule_unknown_application_raises():
+    threshold = Threshold(
+        key="bad", basis=ThresholdBasis(measure="milestone_eligible_spend", window=ANNIV),
+        tier_mode="cumulative", tiers=(Tier(1, Decimal("1000"), Payload(type="activate_rule", rule="x", application="eventually")),),
+    )
+    with pytest.raises(ValueError, match="unknown application"):
+        evaluate_threshold(threshold, [_seg("grocery", 1, "5000")], waiver_segments=[])
+
+
+# ---------------------------------------------------------------------------
+# crossing_month
+# ---------------------------------------------------------------------------
+
+def test_crossing_month_is_the_first_month_the_running_total_meets_the_tier():
+    threshold = Threshold(
+        key="t", basis=ThresholdBasis(measure="milestone_eligible_spend", window=ANNIV),
+        tier_mode="cumulative", tiers=(Tier(1, Decimal("100000"), Payload(type="grant_points", amount=Decimal("1"), currency="x")),),
+    )
+    # 30,000/month: running total crosses 100,000 in month 4 (120,000 >= 100,000; month 3 was only 90,000).
+    segments = [_seg("dining", m, "30000") for m in range(1, 13)]
+    events = evaluate_threshold(threshold, segments, waiver_segments=[])
+    assert events[0].crossing_month == 4
+
+
+def test_crossing_month_none_type_placeholder_not_reached_when_tier_fires():
+    # sanity: a tier that fires always has a crossing_month (can't fire
+    # without the running total having crossed it at some point).
+    threshold = Threshold(
+        key="t", basis=ThresholdBasis(measure="milestone_eligible_spend", window=ANNIV),
+        tier_mode="cumulative", tiers=(Tier(1, Decimal("50000"), Payload(type="grant_points", amount=Decimal("1"), currency="x")),),
+    )
+    events = evaluate_threshold(threshold, [_seg("dining", 12, "60000")], waiver_segments=[])
+    assert events[0].crossing_month == 12
 
 
 # ---------------------------------------------------------------------------

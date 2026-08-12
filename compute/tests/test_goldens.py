@@ -71,7 +71,7 @@ def _load_card_rules(card_key: str):
         earning_rules.append(EarningRule(
             key=er["key"], selector=selector,
             priority=er.get("priority", 10), stacks_with_base=er.get("stacks_with_base", False),
-            rule_group=er.get("rule_group"),
+            rule_group=er.get("rule_group"), requires_activation=er.get("requires_activation", False),
         ))
         # seed.py itself stamps accrual["currency"] = card["currency"] before
         # inserting (the raw fixture dicts always carry currency: None) --
