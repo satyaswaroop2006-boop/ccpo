@@ -5,6 +5,35 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
+## Status as of 2026-08-12 (commit 689d345)
+
+Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
+168/168 tests green. 7/12 synthetic cards have a passing golden (syn_ecom,
+syn_fuel, syn_lounge, syn_miles, syn_slab, syn_travel, syn_upi).
+
+**Genuinely open items** (none blocking today's work; listed so a future
+session doesn't have to scan all 54 entries below to find them):
+
+| # | Item | Why it's still open |
+|---|---|---|
+| #2 | C.7's "UPI small-ticket ₹350" ticket-size row | Never confirmed which reading is correct (category ticket vs. flat ₹350 for UPI-channel segments) |
+| #11, #43 | Multi-category pooled cap / incremental-band windows | Raise rather than guess an attribution scheme; no fixture needs one yet |
+| #9, #32 | Spend-measure caps: only `scope="rule"` supported | `syn_slab` only needs `rule` scope; `rule_group`/`card`-scoped spend-measure caps untested and unimplemented |
+| #12, #39 | Caps × `activate_rule` interaction | Identity-based splice + Stage-5-before-Stage-6/7 ordering wouldn't reconcile if a future rule combines both; no current card does |
+| #14 | `condition: "on_renewal"` carried through unfiltered | No year-mode (Year-1 vs. renewal-year) filtering exists; that's C.4.2/Stage 11 territory, not built |
+| #19 | Flat per-currency `RedemptionFees` (A.12) | Not modelled anywhere; no route in the seed catalog carries one |
+| #27 | Explanation trace is a flat line-item list | Not C.10's full per-node schema (`cap_state`, per-currency `v`/`phi`, `source_refs`) — a real fidelity gap, flagged for a follow-up pass if §37/§74 need it soon |
+| #29 | `WelcomeValue` has no real fixture | Parameter exists in `assemble_nacv`, always 0 in practice — no card/schema payload type for welcome bonuses |
+| #10 | True anniversary alignment | Approximated as calendar-aligned; needs `card_anniversary_month` from wallet mode (not built) |
+| — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
+| — | 5 synthetic cards without a golden | syn_flat, syn_points, syn_renewal, syn_retro, syn_waiver |
+
+**Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
+`activate_rule` prospective/retroactive (#13, resolved #36-40), `syn_slab`
+fill-order for `rule`-scope bands (#9, resolved #41-45, #45-update),
+geography-aware selectors (#4, resolved #51-54), `PV` = NACV for a single
+card, not a separate output (#28).
+
 ---
 
 ## 2026-08-11 -- Stage 1 (normalise.py), Part C SS C.4.1
