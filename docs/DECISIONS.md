@@ -675,3 +675,82 @@ activate_rule end-to-end through the JSON-driven harness, not just direct
 engine-level tests) won't need this fixed retroactively. No existing
 golden currently needs it (syn_ecom/syn_miles/syn_lounge have no
 activation-gated rules).
+
+---
+
+## 2026-08-12 -- Spend-measure caps + syn_slab (Part A SS A.3, C.9 Example 7),
+superseding DECISIONS #9's deferral
+
+### 41. `tier_mode="incremental"` added to match.py, unconditionally excluded
+(no activation opt-in, unlike requires_activation)
+
+syn_slab's three rules (slab1/2/3) all carry an identical empty selector
+`{}` at different priorities -- under ordinary winner-takes-all resolution
+only the highest-priority one (slab1) could ever bind, exactly the problem
+flagged back at Stage 5/6-7. `EarningRule` gained `tier_mode: str | None =
+None`; `match_segment`'s eligibility filter now also excludes `tier_mode
+== "incremental"` rules, with NO opt-in mechanism (unlike
+`requires_activation`'s `active_rule_keys`) -- there's no scenario where an
+incremental-band rule should ever win a segment on its own via ordinary
+matching; it only ever binds through `apply_incremental_bands`. Backward
+compatible: all 147 pre-existing tests passed unchanged (default `None`
+never matches `"incremental"`).
+
+### 42. Incremental bands are a genuinely separate mechanic from ordinary
+caps, not a variant -- confirmed by how little they share in code
+
+`caps.py`'s new `apply_incremental_bands` pools ALL matching segments
+across a window into one total, then walks the group's rules in
+DESCENDING PRIORITY order (syn_slab: slab1 priority 30 > slab2 20 > slab3
+10, exactly matching band1/band2/uncapped's intended fill order), giving
+each band `min(remaining, cap.amount)` of spend at its own rate before
+moving to the next. This shares almost nothing mechanically with
+`apply_caps`'s reward-ceiling-and-overflow logic (different measure,
+different pooling direction, different rounding treatment) beyond reusing
+the same `Cap`/`Window` types and `window_instances` -- confirming the
+original call to treat it as a separate function rather than extending
+`apply_caps` was right. `_validate_incremental_cap` requires
+`measure="spend"` and `scope="rule"` specifically (syn_slab's only
+fixture), raising on anything else rather than guessing at semantics for
+`rule_group`/`card`-scoped or reward-measure incremental caps that no
+current card needs.
+
+### 43. Band rules must share an identical selector -- enforced, not assumed
+
+All three slab rules share selector `{}` in the fixture, so this wasn't
+forced by necessity, but the model only makes sense if every band rule
+targets the SAME underlying spend pool (they're rate slices of one total,
+not independently-targeted rules) -- `apply_incremental_bands` raises if
+any band rule's selector differs from the first one's, rather than
+silently pooling mismatched selectors together.
+
+### 44. Reward per band uses `accrue_transaction` directly on the band's
+spend, not `accrue_category_mode`'s ticket-size approximation
+
+Each band's spend is already an aggregate annual (or per-window) total by
+construction -- there's no "ticket size" to approximate through, so
+`accrue_transaction(accrual, band_spend)` (treating the whole band as one
+transaction) is exact, not an estimate. This is mathematically identical
+to `floor_on_aggregate` regardless of the rule's own `rounding` string
+(both floor a single aggregate amount to the paisa) -- syn_slab's rules
+happen to say `floor_paise_per_txn`, and it doesn't matter which string is
+there for this purpose. No `rounding_estimated` flag is ever produced by
+this path, correctly -- there is no approximation happening.
+
+### 45. Synthetic segments use `category="incremental_band"`; golden-adapter
+wiring deferred
+
+A band's spend is pooled across every matching real category (selector
+`{}` matches everything for syn_slab), so there's no single real category
+to attribute a band's `AccrualResult.segment` to -- a clearly-marked
+synthetic category is used instead (parallel to caps.py's own synthetic
+overflow segments), tagged with the window's last month. Separately: the
+raw seed schema has NO `tier_mode` field at all (not even a `seed.py`
+INSERT column) -- syn_slab's rules are only identifiable as incremental by
+their rule_group sharing spend-measure caps, a heuristic inference the
+golden adapter doesn't attempt. A JSON-driven golden for syn_slab is
+therefore deferred (same posture as activate_rule's rollout, which also
+stuck to direct engine-level tests -- test_rule_activations.py -- rather
+than adding a golden); the 12 unit tests in test_incremental_bands.py use
+real fixture data (rules, rates, caps, priorities) but call
+`apply_incremental_bands` directly.

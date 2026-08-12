@@ -28,6 +28,15 @@ channel, merchant_group. Other C.2.1 fields (mcc, networks, geography,
 transaction amount, date range) are rejected rather than silently ignored,
 same posture as Stage 2 -- see docs/DECISIONS.md for the resulting gap
 (syn_travel's geography-scoped rule isn't matchable yet).
+
+`tier_mode="incremental"` rules (syn_slab's fill-order bands, A.3's convex-
+PWL case) are excluded from ordinary matching UNCONDITIONALLY -- there is
+no `active_rule_keys`-style opt-in for them, because winner-takes-all
+resolution is the wrong mechanic for a rule whose whole point is that
+several same-selector rules each own a *slice* of the same spend pool
+rather than competing for all of it. caps.py's `apply_incremental_bands`
+is the only thing that ever binds them, operating on the pooled spend
+directly rather than through match_segment.
 """
 from __future__ import annotations
 
@@ -76,6 +85,7 @@ class EarningRule:
     stacks_with_base: bool = False
     rule_group: str | None = None
     requires_activation: bool = False
+    tier_mode: str | None = None  # "incremental" -> excluded from ordinary matching; see apply_incremental_bands
 
 
 @dataclass(frozen=True)
@@ -137,7 +147,10 @@ def match_segment(
     for rule in earning_rules:
         _validate_rule(rule)
 
-    eligible = [r for r in earning_rules if not r.requires_activation or r.key in active_rule_keys]
+    eligible = [
+        r for r in earning_rules
+        if r.tier_mode != "incremental" and (not r.requires_activation or r.key in active_rule_keys)
+    ]
     matching = [r for r in eligible if _selector_matches(r.selector, segment)]
     non_stacking = [r for r in matching if not r.stacks_with_base]
     stacking = [r for r in matching if r.stacks_with_base]

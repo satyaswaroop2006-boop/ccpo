@@ -26,12 +26,16 @@ month that crosses the cap, it re-runs Stage 3's match on that month's
 segment with every pooled rule excluded, and uses whichever non-stacking
 rule wins. `overflow: "zero"` just discards the excess.
 
-Scope: measure="reward" only -- "spend"-measure caps are syn_slab's
-incremental-band mechanic, deferred alongside its fill-order requirement
-(see docs/DECISIONS.md; confirmed out of scope with Satya). A cap window
-that pools more than one distinct category/channel combination raises
-rather than guessing how to attribute the overflow across them -- no
-current synthetic card's cap does this, and it needs its own design pass.
+`apply_caps` (this stage's main entry point) handles measure="reward" only.
+"spend"-measure caps are syn_slab's incremental-band mechanic (A.3's
+convex-PWL case: several same-selector rules, increasing rates, each
+owning a *slice* of one pooled spend total rather than competing for all
+of it) -- handled by the separate `apply_incremental_bands` below, since
+it's a genuinely different mechanic from an ordinary reward ceiling, not
+a variant of one. A cap window that pools more than one distinct category/
+channel combination raises rather than guessing how to attribute the
+overflow across them -- no current synthetic card's ordinary cap does
+this, and it needs its own design pass.
 """
 from __future__ import annotations
 
@@ -40,7 +44,8 @@ from decimal import Decimal
 from typing import Sequence
 
 from engine.accrue import Accrual, AccrualResult, accrue_transaction
-from engine.match import EarningRule, match_segment
+from engine.match import EarningRule, Selector, match_segment
+from engine.normalise import SpendSegment
 
 VALID_MEASURE = frozenset({"reward"})
 VALID_WINDOW_KINDS = frozenset({"calendar_month", "quarter", "calendar_year", "anniversary_year", "statement_cycle"})
@@ -205,3 +210,99 @@ def apply_caps(
     for cap in sorted(caps, key=lambda c: _GRANULARITY_RANK[c.window.kind]):
         results = _apply_one_cap(results, cap, earning_rules, accruals)
     return results
+
+
+# ---------------------------------------------------------------------------
+# Incremental bands (A.3's convex-PWL case; C.9 Example 7, syn_slab)
+# ---------------------------------------------------------------------------
+
+def _selector_matches(selector: Selector, segment: SpendSegment) -> bool:
+    if selector.categories is not None and segment.category not in selector.categories:
+        return False
+    if selector.channels is not None and segment.channel not in selector.channels:
+        return False
+    if selector.merchant_groups is not None and segment.merchant_group not in selector.merchant_groups:
+        return False
+    return True
+
+
+def _validate_incremental_cap(cap: Cap) -> None:
+    if cap.measure != "spend":
+        raise ValueError(f"cap {cap.key!r}: incremental bands need measure='spend', got {cap.measure!r}")
+    if cap.window.kind not in VALID_WINDOW_KINDS:
+        raise ValueError(f"cap {cap.key!r}: unknown window kind {cap.window.kind!r}")
+    if cap.scope != "rule":
+        raise ValueError(f"cap {cap.key!r}: incremental band caps only support scope='rule', got {cap.scope!r}")
+
+
+def apply_incremental_bands(
+    reward_segments: Sequence[SpendSegment],
+    band_rules: Sequence[EarningRule],
+    caps: Sequence[Cap],
+    accruals: dict[str, Accrual],
+) -> tuple[AccrualResult, ...]:
+    """Fills each band in descending-priority order (syn_slab: 1% up to
+    Rs1L, then 2% for the next Rs2L, then 3% uncapped) from one pooled
+    spend total, per A.3's concave/convex band curve. A band without a
+    matching cap in `caps` is treated as uncapped -- gets whatever spend
+    remains after every higher-priority band has taken its share; this
+    should only ever be the LOWEST-priority band (syn_slab's slab3), but
+    nothing here enforces that ordering assumption beyond the fill loop
+    itself naturally leaving nothing for any band ordered after an
+    uncapped one.
+
+    Every band rule must share an identical selector (they're slices of
+    ONE spend pool, not independently-targeted rules) and every capped
+    band must share one window -- both raise otherwise.
+
+    Reward per band is computed by treating the whole band's spend as one
+    aggregate amount through accrue_transaction -- mathematically identical
+    to `floor_on_aggregate` regardless of the rule's own rounding string,
+    since flooring a single aggregate amount to the paisa is the same
+    operation either way.
+    """
+    if not band_rules:
+        return ()
+
+    shared_selector = band_rules[0].selector
+    if any(r.selector != shared_selector for r in band_rules):
+        raise ValueError("incremental band rules must share an identical selector")
+
+    for cap in caps:
+        _validate_incremental_cap(cap)
+    caps_by_rule = {c.rule_key: c for c in caps}
+
+    capped_windows = {caps_by_rule[r.key].window for r in band_rules if r.key in caps_by_rule}
+    if len(capped_windows) != 1:
+        raise ValueError("incremental band group needs exactly one shared window across its capped bands")
+    window = next(iter(capped_windows))
+
+    ordered_rules = sorted(band_rules, key=lambda r: r.priority, reverse=True)
+    matching_segments = [s for s in reward_segments if _selector_matches(shared_selector, s)]
+
+    results: list[AccrualResult] = []
+    for instance_months in window_instances(window):
+        month_set = set(instance_months)
+        pooled_spend = sum((s.amount for s in matching_segments if s.month in month_set), Decimal("0"))
+        if pooled_spend <= 0:
+            continue
+
+        remaining = pooled_spend
+        last_month = max(instance_months)
+        for rule in ordered_rules:
+            if remaining <= 0:
+                break
+            cap = caps_by_rule.get(rule.key)
+            band_spend = min(remaining, cap.amount) if cap is not None else remaining
+            if band_spend <= 0:
+                continue
+            remaining -= band_spend
+
+            reward = accrue_transaction(accruals[rule.key], band_spend)
+            synthetic_segment = SpendSegment(
+                category="incremental_band", channel=None, month=last_month,
+                amount=band_spend, ticket_size=band_spend,
+            )
+            results.append(AccrualResult(rule_key=rule.key, segment=synthetic_segment, reward=reward))
+
+    return tuple(results)
