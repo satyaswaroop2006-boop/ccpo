@@ -5,7 +5,7 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (commit TBD -- PostgresCardRepository live-wired)
+## Status as of 2026-08-12 (commit 5301d3c -- PostgresCardRepository live-wired)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
 177/177 tests green, 12/12 synthetic cards have a passing golden -- full
