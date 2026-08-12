@@ -544,3 +544,53 @@ don't have a defined Sbar conversion the way a reward-measure cap does
 (there's no "reward ceiling" to convert from; the amount already is a
 spend boundary, but interpreting it as a breakpoint requires resolving
 syn_slab's fill-order mechanic first, which stays deferred).
+
+---
+
+## 2026-08-12 -- Second and third goldens: syn_miles, syn_lounge
+
+### 33. Bug found and fixed: golden adapter never propagated a rule's currency
+
+Both new goldens failed on the very first run with `KeyError: None` inside
+`value_accrual_results`. Cause: `seeds/synthetic_cards.py`'s raw
+`earning_rules[i]["accrual"]` dicts always carry `"currency": None` --
+that's a placeholder. `seed.py` itself stamps the real value in before
+inserting (`accrual["currency"] = card["currency"]`, seed.py line ~101),
+which the golden adapter's `_accrual_from_dict` never mirrored -- it just
+read the placeholder `None` straight through. Invisible for
+golden_syn_ecom_basic.json because cashback_inr's trivial v===1 pricing
+never actually needs to look the currency up by key anywhere in that
+golden's assertions. Fixed by threading `card["currency"]` into
+`_accrual_from_dict` from `_load_card_rules`, matching seed.py's own
+behaviour exactly. A good example of why "wire a second real golden" finds
+things a single golden can't -- this bug was latent in the adapter since
+Stage 4's golden, just never exercised.
+
+### 34. Per-category custom seasonality added to the golden JSON format
+
+golden_syn_lounge_quarterly_gate.json needed two qualifying quarters and
+two that fall short (per-quarter independence, C.9 Example 11's whole
+point) -- not expressible as a single annual total under uniform
+seasonality. Extended `_parse_spend_annual` to accept an optional
+`seasonality` dict (category -> 12-weight list), reusing `normalise()`'s
+existing non-uniform seasonality support (already built and tested at
+Stage 1) rather than adding new machinery. Weights were chosen so both
+the monthly amounts AND the resulting points (ea=1/75 exactly, zero floor
+loss at the chosen Rs600 dining ticket) land on clean, hand-verifiable
+numbers -- deliberate, not incidental: any weight split that didn't
+divide cleanly would still be computed correctly (Stage 1's paisa-exact
+reconciliation guarantees that), but would be much harder to state a
+concise, checkable `_hand_computation` against, per CLAUDE.md's testing
+rule.
+
+### 35. `assumptions` block now carries structured values, not just prose
+
+golden_syn_ecom_basic.json's `assumptions.note` was free text. The two new
+goldens need actual machine-readable values with no home anywhere in the
+card schema -- `primary_route` (per currency), `benefit_need`/
+`benefit_unit_value` (per benefit), `voucher_utilisation`/
+`voucher_friction` -- since these are user/registry inputs (C.7), not card
+facts. Added as structured sibling keys alongside the existing free-text
+`note`, read directly by the test rather than defaulted anywhere -- same
+"caller supplies, engine never invents" posture as Stage 8/9's own
+utilisation/friction parameters.
