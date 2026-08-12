@@ -81,25 +81,35 @@ decision in `docs/DECISIONS.md` (create on first use).
       #10's deferral) — the repair *pass* over the breakpoint compiler
       (already done, `breakpoints.py`) is separately Phase 4
       (`optimiser/repair.py` per E.0).
-- [~] Phase 4 — optimiser (E.2–E.9), `/optimise`, repair pass. **Slice 1
-      done**: `optimiser/allocate.py` — the inner MILP for a *fixed* card
-      subset (Part B SS B.2–B.4, Part E SS E.4), PuLP + HiGHS (CBC
-      fallback verified), 219/219 tests green. Continuous variables only
-      (`x`, `s`) — no card-selection binary `y` (subset is a given input,
-      per B.6/E.4), no milestone/waiver/fee/benefit-dedup binaries yet
-      (docs/DECISIONS.md #68). Reward caps restricted to `scope="rule"` +
+- [~] Phase 4 — optimiser (E.2–E.9), `/optimise`, repair pass.
+      **Slice 1 done**: `optimiser/allocate.py` — the inner MILP for a
+      *fixed* card subset (Part B SS B.2–B.4, Part E SS E.4), PuLP +
+      HiGHS (CBC fallback verified). Continuous variables only (`x`, `s`)
+      — no card-selection binary `y` (subset is a given input, per
+      B.6/E.4), no milestone/waiver/fee/benefit-dedup binaries yet (docs/
+      DECISIONS.md #68). Reward caps restricted to `scope="rule"` +
       monthly windows this slice (#70) — excludes nothing in the current
       12-card catalog, but `rule_group`/`card`-scoped and quarterly/annual
       reward caps raise rather than silently mismodel, same for
       `tier_mode="incremental"` cards (`syn_slab`). Verified against 3
       hand-computed scenarios incl. an exact match to
-      `golden_syn_ecom_basic.json`. **Remaining build order** (#68):
-      `optimiser/repair.py` (E.7, feeds `allocate`'s proposal to Phase 3's
-      `evaluate_card`, repairs if gap > 2%) → `optimiser/enumerate.py`
-      (E.3, subset generation) → `optimiser/candidates.py` (E.2,
-      pre-filtering) → `optimiser/frontier.py` + `optimiser/classify.py`
-      (E.8–E.9) → `optimiser/scenarios.py` (E.11) →
-      `optimiser/explain.py` (E.12) + `POST /optimise`.
+      `golden_syn_ecom_basic.json`.
+      **Slice 2 done**: `optimiser/repair.py` (E.1 steps 5-6, E.7) —
+      `evaluate_allocation` translates an `allocate()` solution into
+      per-card spend and runs it through Phase 3's `evaluate_card`
+      unchanged (pv_exact); `repair` walks `breakpoints.py`'s compiled
+      threshold list (Phase 2, reused as-is) and tries topping under-
+      threshold cards up from the outside option `c0` when within
+      `buffer(β)`, keeping the exact-verified best. Near-miss only, not
+      "barely-made" (already handled by the LP's own segment structure —
+      #71/#72); top-up sourced from `c0` only, full-cover-or-nothing.
+      223/223 tests green.
+      **Remaining build order** (#68): `optimiser/enumerate.py` (E.3,
+      subset generation, calling `allocate` + `repair` per subset) →
+      `optimiser/candidates.py` (E.2, pre-filtering) →
+      `optimiser/frontier.py` + `optimiser/classify.py` (E.8–E.9) →
+      `optimiser/scenarios.py` (E.11) → `optimiser/explain.py` (E.12) +
+      `POST /optimise`.
 - [ ] Phase 5 — real card ingestion (Part I workflow)
 - [ ] Phase 6 — frontend (Part F, to be authored)
 

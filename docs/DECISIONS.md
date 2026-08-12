@@ -5,17 +5,18 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (Phase 4 slice 1 -- optimiser/allocate.py)
+## Status as of 2026-08-12 (Phase 4 slice 2 -- optimiser/repair.py)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
 177/177 tests green, 12/12 synthetic cards have a passing golden -- full
 C.9 coverage. Phase 3 complete end-to-end: `engine/evaluate.py`'s
 `evaluate_card` orchestrator, `POST /evaluate` and `POST /next-best-spend`
 wired in `app/main.py`, live-backed by `PostgresCardRepository`. Phase 4
-started: `optimiser/allocate.py` -- the inner MILP for a fixed card
-subset (Part B SS B.2-B.4, Part E SS E.4), continuous-variables-only this
-slice (#68 below) -- 219/219 tests green. No blocking deferrals -- 9
-non-blocking items remain open (table below); none of them gate this work.
+in progress: `optimiser/allocate.py` (slice 1, the inner MILP for a fixed
+card subset) + `optimiser/repair.py` (slice 2, exact evaluation +
+near-miss threshold repair) -- 223/223 tests green. No blocking deferrals
+-- 10 non-blocking items remain open (table below); none of them gate
+this work.
 
 **Genuinely open items** (none blocking today's work; listed so a future
 session doesn't have to scan all entries below to find them):
@@ -31,6 +32,7 @@ session doesn't have to scan all entries below to find them):
 | #29 | `WelcomeValue` has no real fixture | Parameter exists in `assemble_nacv`, always 0 in practice — no card/schema payload type for welcome bonuses |
 | #10, #61 | True anniversary alignment; wallet mid-year state (`current_year_progress`) | Approximated as calendar-aligned; needs `card_anniversary_month` AND a way to seed already-triggered threshold/cap state, neither built (wallet mode itself doesn't exist yet) |
 | #68 | `optimiser/allocate.py`: milestones/waiver/fees/benefit-dedup/card-selection/incremental-tier/rule_group-and-card-scoped-caps/quarterly-and-annual-reward-caps | This slice is continuous-variables-only (B.2's `x`,`s`); every binary-needing mechanic and every cap shape beyond scope="rule"+monthly-window is the explicit next increment, not silently dropped -- see #70 |
+| #71 | `optimiser/repair.py`: no "barely-made" variants, no cap breakpoints, top-up sourced from `c0` only | Each is a real design surface deferred, not an oversight -- barely-made needs a cost model for what a card's excess spend gives up elsewhere; cap breakpoints are already optimal by construction in `allocate.py`'s LP; pulling top-up from a real card (not just `c0`) needs the same cost model barely-made does -- see #72 |
 | — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
 
 **Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
@@ -1513,3 +1515,103 @@ switched to `prob.add_variable(...)` throughout, eliminating 324 of 325
 deprecation warnings the first draft produced.
 
 219/219 tests green (214 prior + 5 new).
+
+---
+
+## 2026-08-12 -- Phase 4 slice 2: `optimiser/repair.py`, exact evaluation +
+near-miss threshold repair (Part E SS E.1 steps 5-6, SS E.7; Part A SS
+A.16; Part B SS B.10.4)
+
+### 71. E.7 splits into two independently-buildable parts; A.16/B.10.4's
+"fix the binaries" framing doesn't apply yet because there are no binaries
+
+A.16/B.10.4 describe the repair rule as "fix milestone/waiver binaries to
+their evaluator-verified states, re-allocate once" -- language that
+presumes the MILP already models milestones/waivers as binaries `z`/`w`.
+Slice 1's LP doesn't (docs/DECISIONS.md #68) -- continuous variables only,
+by design. Rather than block on that (or worse, silently build a
+"repair" that doesn't actually repair anything meaningful), re-read E.7's
+own two-part description directly: "(1) run the engine on the MILP
+allocation -> pv_exact... (2) compile the breakpoint list, generate near-
+miss/barely-made variants, evaluate, keep the max." Part (1) is E.1 step
+5 (EVALUATE) and needs nothing from the LP's own structure -- just a
+translation from `allocate.py`'s `x(c,k,t)` solution to `evaluate_card`
+calls. Part (2) uses `engine/breakpoints.py` (already built, Phase 2),
+which compiles from a card's *rules* directly, independent of whatever
+the LP's objective does or doesn't model.
+
+Realized while designing this: because slice 1's LP has literally zero
+milestone/waiver terms in its objective, it is *structurally blind* to
+thresholds -- its allocation has no reason whatsoever to land near one.
+The near-miss variant search is therefore not a refinement of an
+otherwise-complete optimiser right now; it is currently the *only*
+mechanism in the whole pipeline that can capture threshold value at all.
+That will flip once a future slice adds milestone/waiver binaries
+directly to the LP (at which point near-miss becomes a genuine refinement
+on top of an already-threshold-aware allocation) -- but it's the load-
+bearing piece today, which argued for building it now rather than later.
+
+### 72. Three scope narrowings for this pass, each a real design surface
+deferred rather than an oversight
+
+- **Near-miss only, not "barely-made."** Barely-made means pulling back
+  spend that's just cleared a *cap* boundary in case it earns more
+  elsewhere -- but `allocate.py`'s LP already gets this right by
+  construction (B.5: a maximising LP fills the higher-rate segment
+  first, automatically deciding how much spend should sit past a cap).
+  It's specifically *threshold* breakpoints the LP can't see, and
+  thresholds only ever add value once crossed (never make crossing them
+  worse) -- so near-miss (push under-threshold spend over) is the case
+  with real LP-invisible upside; barely-made-past-a-milestone (pull back
+  spend that already earned a milestone, hoping the freed spend does
+  better elsewhere) is a legitimate but secondary refinement.
+  `repair.py` doesn't even compile cap breakpoints (`CardBreakpointInputs
+  .caps` left empty) -- consistent with the same reasoning.
+- **Top-up sourced from `c0` only.** Moving spend FROM the outside option
+  is always safe (it earns nothing, so there's no opportunity cost to
+  weigh) -- matches C.0's own "top-up... spend to cross T(beta))"
+  phrasing exactly. Pulling from a real card's allocation instead needs a
+  cost model for what's given up there -- the same kind of model barely-
+  made would need, deferred alongside it.
+- **Full cover or nothing.** A near-miss variant is only constructed when
+  `c0` can cover the *entire* gap -- a partial top-up would leave the
+  threshold uncrossed (thresholds are step functions, no partial credit)
+  while still taking on the small opportunity cost of having moved spend
+  at all, so it can only ever be neutral-to-harmful. Never worth
+  evaluating.
+
+### Design and verification
+
+`evaluate_allocation(bundles, currencies, allocation, assumptions)`
+groups an `AllocationResult`'s `SpendAllocation` entries by card and by
+`SpendKey`, reconstructs a `CategorySpend` with a seasonality vector
+derived from the *actual* per-month amounts (`engine.normalise._allocate`'s
+own paisa-exact residual reconciliation guarantees this round-trips to
+the exact original monthly split), and runs each card through Phase 3's
+unchanged `evaluate_card` -- the only place this module computes a rupee
+value (CLAUDE.md rule 1). `repair(...)` calls this once for the baseline,
+then for every threshold breakpoint on every card (via `engine.breakpoints
+.compile_card_breakpoints`, reused unchanged) and every window instance
+(`engine.caps.window_instances`, reused) checks whether current pooled
+spend -- computed by building real `SpendSegment`s from the allocation and
+running them through `engine.eligibility.apply_eligibility` (reused;
+exactly Stage 2's milestone/waiver view split) -- falls within `buffer(beta)`
+short of the threshold. Each in-range breakpoint gets its own independent
+top-up variant (never chained onto a previous variant), evaluated and kept
+only if it beats the current best -- matching E.7's "~60 extra evaluator
+calls per subset" budget (per-breakpoint, not combinatorial).
+
+Verified with `tests/test_repair.py`, allocations constructed directly
+(not solver-emergent, for the same reason slice 1's own tests used hand-
+picked spend rather than hoping `allocate()` happens to produce a
+near-miss): `syn_ecom` at ₹96,000/yr grocery (₹4,000 short of its
+₹1,00,000 waiver threshold, buffer ₹5,000) with ₹4,000/mo dining parked
+on `c0` -- baseline NACV ₹370.00 (fee charged), repaired NACV ₹1,000.00
+(waiver crossed, fee waived), `repair_applied=True`. A no-`c0`-supply
+variant and a beyond-buffer variant both correctly produce zero variants
+tried. A real `allocate()` solve (slice 1's own scenario 1) round-tripped
+through `evaluate_allocation` reproduces `golden_syn_ecom_basic.json`'s
+₹14,400.00 exactly, proving the allocation-to-evaluator translation
+itself is correct, not just `allocate()`'s internal accounting.
+
+223/223 tests green (219 prior + 4 new).
