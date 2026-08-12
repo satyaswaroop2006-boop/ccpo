@@ -1,0 +1,39 @@
+{
+  "id": "golden_syn_upi_channel",
+  "purpose": "C.9 Example 9 (RuPay UPI card): channel-based selector matching (only channel=upi spend earns anything -- there is no base rule), the channel x category exclusion (UPI fuel/rent earns nothing), and a monthly reward-measure cap with zero overflow, all together. No thresholds, no fee on this card.",
+  "card": "syn_upi",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "primary_route": { "synth_points": "stmt" },
+    "note": "Grocery ticket 700 is an exact multiple of the 100-unit rule -- zero floor loss, no rounding_estimated flag expected. Non-UPI (general channel) spend matches no rule at all -- this card has only the one channel=upi earning rule -- so it earns nothing, which is itself part of what this golden checks."
+  },
+  "spend_annual": {
+    "grocery/upi": 720000,
+    "fuel/upi": 36000,
+    "rent/upi": 60000,
+    "grocery": 120000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Stage 2 (eligibility): the upi_fuel_rent exclusion (channels=[upi], categories=[fuel,rent]) removes UPI fuel and UPI rent from the reward view entirely. UPI grocery (category not in [fuel,rent]) and general (non-UPI) grocery are unaffected by this exclusion.",
+    "Stage 3 (match): the card's only earning rule requires channels=[upi]. UPI grocery matches and binds. General (channel=None) grocery matches NO rule at all (there is no base rule on this card) -> earns nothing.",
+    "Stage 4 (accrue): UPI grocery Rs60,000/month @ ticket 700 (1pt/Rs100, zero floor loss, ea=1/100=0.01 exact) -> 0.01*60,000 = 600 pts/month, uncapped.",
+    "Stage 5 (cap): cap_upi = 500 pts/month, overflow=zero. 600 > 500 every month -> capped to 500 pts/month, the excess 100 pts/month is simply discarded (not re-rated -- there is no fallback rule to re-rate it to). Annual capped total = 500 * 12 = 6,000 pts.",
+    "UPI fuel (Rs3,000/month) and UPI rent (Rs5,000/month): excluded from rewards at Stage 2, never reach Stage 3 at all -> 0 pts.",
+    "General grocery (Rs10,000/month, non-UPI channel): reaches Stage 3 but matches no rule -> 0 pts.",
+    "Gross reward = 6,000 pts. Valued at the declared primary route 'stmt': ratio 0.25, default friction 1.0 -> 0.25/pt. GR = 6,000 * 0.25 = Rs1,500.",
+    "No thresholds on this card -> milestone_value = 0. No benefits -> benefit_value = 0. Annual fee = Rs0, no waiver threshold -> fee_paid = 0 in both Year-1 and steady-state.",
+    "NACV steady-state = 1,500 - 0 = 1,500. NACV Year-1 = 1,500 - 0 = 1,500 (identical, no fee at all).",
+    "3-year cumulative = 1,500 + 2*1,500 = 4,500."
+  ],
+  "expected": {
+    "gross_reward_value": 1500.00,
+    "milestone_value": 0.00,
+    "fee_paid": 0.00,
+    "nacv_steady_state": 1500.00,
+    "nacv_year_1": 1500.00,
+    "nacv_3yr": 4500.00,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}

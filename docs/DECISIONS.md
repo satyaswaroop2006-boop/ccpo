@@ -760,3 +760,39 @@ NACV steady-state = Year-1 = Rs11,000, 3yr = Rs33,000. Passed on the first
 run against the same hand computation as `test_incremental_bands.py`'s
 direct-call tests -- good confirmation the two paths (direct engine call
 vs. full JSON-driven pipeline) agree.
+
+---
+
+## 2026-08-12 -- Wire golden_syn_upi_channel.json (C.9 Example 9)
+
+### 46. First golden to exercise Stage 2 exclusions -- adapter gap closed
+
+All four prior goldens called `apply_eligibility(normalised,
+exclusions=())` -- none had a real exclusion in their card's fixture.
+`test_goldens.py` had no `_load_exclusions`/`_exclusion_selector_from_dict`
+at all until now; added, mirroring `_selector_from_dict`'s pattern
+(categories/channels/merchant_groups only, matching what eligibility.py's
+own `_selector_matches` supports). syn_upi's single exclusion
+(`upi_fuel_rent`: channels=[upi], categories=[fuel,rent], excluded_from=
+[rewards]) is the fixture.
+
+### 47. This card has no base/catch-all earning rule -- asserted explicitly,
+not just implied by the totals
+
+syn_upi's only earning rule requires `channels=[upi]`; there's nothing
+else. The golden spend deliberately includes Rs10,000/month of ordinary
+(non-UPI-channel) grocery spend specifically to prove it earns nothing --
+`bound_categories == {"grocery"}` with `all(... channel == "upi")` checks
+that Stage 3 produced zero bindings for the non-UPI segments, not just
+that the final reward total happens to match (a total-only check could
+pass even if bindings were wrong in an offsetting way).
+
+### 48. Cap deliberately sized to bind, not just be present
+
+Initial spend sizing left the Rs500/month cap unexercised (any grocery
+spend under Rs50,000/month never reaches it) -- untested-but-present
+caps in a golden defeat the point of C.9 Example 9 being partly about the
+cap. Resized UPI grocery to Rs60,000/month (600pts uncapped) specifically
+so the cap trims it to 500pts/month with the 100pts/month excess
+genuinely discarded (overflow="zero", no fallback rate to re-rate it to,
+unlike syn_ecom's base_rate overflow).

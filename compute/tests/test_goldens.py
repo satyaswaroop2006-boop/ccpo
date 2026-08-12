@@ -6,15 +6,15 @@ The seed->engine adapter below (`_load_card_rules`/`_load_thresholds`/
 `_load_benefits`/`_load_currencies`) translates directly from
 seeds/synthetic_cards.py so goldens test the same rule data that gets
 seeded into the database. It currently handles percentage/per_unit
-accruals, category/channel/merchant_group selectors, Stage 5's full
-reward-measure cap support (any window kind, any scope), spend-measure
-incremental bands (`tier_mode` inferred from rule_group + spend-measure
-caps, since the raw schema has no explicit field -- see
-`_load_card_rules`), activate_rule (requires_activation carried straight
-from the seed field), Stage 6-7's grant-type threshold payloads, Stage 8's
-currency/route valuation, and Stage 9's countable/voucher benefits. It
-will still need extending for surcharges/forex once a golden needs them
-(none do yet).
+accruals, category/channel/merchant_group selectors, Stage 2's exclusions
+(`_load_exclusions`), Stage 5's full reward-measure cap support (any
+window kind, any scope), spend-measure incremental bands (`tier_mode`
+inferred from rule_group + spend-measure caps, since the raw schema has
+no explicit field -- see `_load_card_rules`), activate_rule
+(requires_activation carried straight from the seed field), Stage 6-7's
+grant-type threshold payloads, Stage 8's currency/route valuation, and
+Stage 9's countable/voucher benefits. It will still need extending for
+surcharges/forex once a golden needs them (none do yet).
 
 Need/unit_value/utilisation/friction/primary-route assumptions have no
 home in the card schema at all (they're user/registry inputs, per C.7) --
@@ -30,7 +30,7 @@ from engine.assemble import assemble_nacv, value_milestone_grants
 from engine.benefits import Benefit, value_countable_benefit, value_voucher_benefit
 from engine.caps import Cap, Window, apply_caps, apply_incremental_bands
 from engine.costs import compute_fees
-from engine.eligibility import apply_eligibility
+from engine.eligibility import Exclusion, ExclusionSelector, apply_eligibility
 from engine.match import EarningRule, Selector, match
 from engine.normalise import AssumptionsSnapshot, CategorySpend, NormalisedSpend, SpendInput, normalise
 from engine.thresholds import Payload, Threshold, ThresholdBasis, Tier, evaluate_thresholds
@@ -49,6 +49,28 @@ def _selector_from_dict(d: dict) -> Selector:
     if d.get("merchant_groups") is not None:
         kwargs["merchant_groups"] = tuple(d["merchant_groups"])
     return Selector(**kwargs)
+
+
+def _exclusion_selector_from_dict(d: dict) -> ExclusionSelector:
+    kwargs = {}
+    if d.get("categories") is not None:
+        kwargs["categories"] = tuple(d["categories"])
+    if d.get("channels") is not None:
+        kwargs["channels"] = tuple(d["channels"])
+    if d.get("merchant_groups") is not None:
+        kwargs["merchant_groups"] = tuple(d["merchant_groups"])
+    return ExclusionSelector(**kwargs)
+
+
+def _load_exclusions(card_key: str) -> tuple[Exclusion, ...]:
+    card = next(c for c in CARDS if c["key"] == card_key)
+    return tuple(
+        Exclusion(
+            key=e["key"], selector=_exclusion_selector_from_dict(e["selector"]),
+            excluded_from=tuple(e["excluded_from"]), note=e.get("note"),
+        )
+        for e in card.get("exclusions", [])
+    )
 
 
 def _accrual_from_dict(d: dict, currency: str) -> Accrual:
@@ -374,6 +396,64 @@ def test_golden_syn_slab_bands():
 
     nacv = assemble_nacv(
         gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    assert nacv.three_year == Decimal(str(golden["expected"]["nacv_3yr"]))
+
+
+def test_golden_syn_upi_channel():
+    golden = json.loads((GOLDENS_DIR / "golden_syn_upi_channel.json").read_text())
+    assert golden["card"] == "syn_upi"
+
+    spend_input = _parse_spend_annual(golden["spend_annual"])
+    normalised = normalise(spend_input, AssumptionsSnapshot())
+
+    exclusions = _load_exclusions("syn_upi")
+    assert len(exclusions) == 1  # upi_fuel_rent
+    eligible = apply_eligibility(normalised, exclusions)
+
+    # UPI fuel/rent excluded from the reward view entirely at Stage 2.
+    reward_categories = {(s.category, s.channel) for s in eligible.reward}
+    assert ("fuel", "upi") not in reward_categories
+    assert ("rent", "upi") not in reward_categories
+    assert ("grocery", "upi") in reward_categories
+    assert ("grocery", None) in reward_categories  # general spend untouched by the exclusion
+
+    earning_rules, accruals, caps = _load_card_rules("syn_upi")
+    bindings = match(NormalisedSpend(segments=eligible.reward), earning_rules)
+    # General (non-UPI) grocery matches no rule at all -- this card has only
+    # the one channel=upi earning rule, no base/catch-all rule.
+    bound_categories = {b.segment.category for b in bindings}
+    assert bound_categories == {"grocery"}
+    assert all(b.segment.channel == "upi" for b in bindings)
+
+    uncapped = accrue_category_mode(bindings, accruals)
+    final = apply_caps(uncapped, caps, earning_rules, accruals)
+    assert not any(r.flags for r in final)  # no rounding_estimated, no cap_overflow (overflow=zero)
+
+    gross_reward_points = sum((r.reward for r in final), Decimal("0"))
+    assert gross_reward_points == Decimal("6000")  # 500pts/mo capped * 12
+
+    currencies = _load_currencies()
+    primary_routes = golden["assumptions"]["primary_route"]
+    reward_valuations = value_accrual_results(final, accruals, currencies, primary_routes)
+    gross_reward_rupees = sum((v.v_exp_rupees for v in reward_valuations), Decimal("0"))
+    assert gross_reward_rupees == Decimal(str(golden["expected"]["gross_reward_value"]))
+
+    thresholds = _load_thresholds("syn_upi")
+    assert thresholds == ()  # this card has none
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+
+    card = next(c for c in CARDS if c["key"] == "syn_upi")
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_rupees, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
         steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
     )
     assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
