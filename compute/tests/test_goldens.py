@@ -2,20 +2,20 @@
 through the full engine pipeline built so far, hand computation in each
 golden's own `_hand_computation` is the arbiter of a red test.
 
-The seed->engine adapter below (`_load_card_rules`/`_load_thresholds`/
-`_load_benefits`/`_load_currencies`) translates directly from
-seeds/synthetic_cards.py so goldens test the same rule data that gets
-seeded into the database. It currently handles percentage/per_unit
-accruals, category/channel/merchant_group/geography selectors, Stage 2's
-exclusions (`_load_exclusions`), Stage 5's full reward-measure cap support
-(any window kind, any scope), spend-measure incremental bands (`tier_mode`
-inferred from rule_group + spend-measure caps, since the raw schema has
-no explicit field -- see `_load_card_rules`), activate_rule
-(requires_activation carried straight from the seed field), Stage 6-7's
-grant-type threshold payloads, Stage 8's currency/route valuation, Stage
-9's countable/voucher benefits, and Stage 10's surcharges/forex
-(`_load_surcharges`, `international_spend_total`). Every engine construct
-in Part C SS C.9's catalogue now has at least one golden exercising it.
+The seed->engine translation itself (percentage/per_unit accruals,
+category/channel/merchant_group/geography selectors, Stage 2's exclusions,
+Stage 5's full reward-measure cap support, spend-measure incremental
+bands, activate_rule, Stage 6-7's grant-type threshold payloads, Stage 8's
+currency/route valuation, Stage 9's countable/voucher benefits, and Stage
+10's surcharges/forex) now lives in `engine/card_bundle.py`
+(`bundle_from_dict`/`currencies_from_dicts`), promoted out of this file in
+Phase 3 so `engine/evaluate.py` and the API layer reuse the exact same
+translation instead of a second copy. The thin `_load_*` wrappers below
+just look a card up in `CARDS` by key and pull the relevant piece back out
+of the bundle -- every test body below is otherwise unchanged from before
+that refactor, which is the regression proof the extraction was faithful.
+Every engine construct in Part C SS C.9's catalogue has at least one
+golden exercising it.
 
 `_parse_spend_annual`'s key format is "category[/channel][~merchant_group]
 [@geography]" -- e.g. "international_flights@international" or
@@ -33,199 +33,52 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
-from engine.accrue import Accrual, accrue_category_mode
+from engine.accrue import accrue_category_mode
 from engine.assemble import assemble_nacv, value_milestone_grants, value_milestone_grants_by_year_mode
 from engine.benefits import Benefit, value_countable_benefit, value_voucher_benefit
-from engine.caps import Cap, Window, apply_caps, apply_incremental_bands
+from engine.card_bundle import bundle_from_dict, currencies_from_dicts
+from engine.caps import apply_caps, apply_incremental_bands
 from engine.costs import Surcharge, compute_fees, forex_cost, international_spend_total, surcharge_cost
-from engine.eligibility import Exclusion, ExclusionSelector, apply_eligibility
-from engine.match import EarningRule, Selector, match
+from engine.eligibility import apply_eligibility
+from engine.match import match
 from engine.normalise import AssumptionsSnapshot, CategorySpend, NormalisedSpend, SpendInput, normalise
-from engine.thresholds import Payload, Threshold, ThresholdBasis, Tier, apply_rule_activations, evaluate_thresholds
-from engine.valuation import RedemptionRoute, RewardCurrency, value_accrual_results
+from engine.thresholds import Threshold, apply_rule_activations, evaluate_thresholds
+from engine.valuation import RewardCurrency, value_accrual_results
 from seeds.synthetic_cards import CARDS, CURRENCIES
 
 GOLDENS_DIR = Path(__file__).resolve().parent.parent / "goldens"
 
 
-def _selector_from_dict(d: dict) -> Selector:
-    kwargs = {}
-    if d.get("categories") is not None:
-        kwargs["categories"] = tuple(d["categories"])
-    if d.get("channels") is not None:
-        kwargs["channels"] = tuple(d["channels"])
-    if d.get("merchant_groups") is not None:
-        kwargs["merchant_groups"] = tuple(d["merchant_groups"])
-    if d.get("geography") is not None:
-        kwargs["geography"] = d["geography"]
-    return Selector(**kwargs)
+def _card_dict(card_key: str) -> dict:
+    return next(c for c in CARDS if c["key"] == card_key)
 
 
-def _exclusion_selector_from_dict(d: dict) -> ExclusionSelector:
-    kwargs = {}
-    if d.get("categories") is not None:
-        kwargs["categories"] = tuple(d["categories"])
-    if d.get("channels") is not None:
-        kwargs["channels"] = tuple(d["channels"])
-    if d.get("merchant_groups") is not None:
-        kwargs["merchant_groups"] = tuple(d["merchant_groups"])
-    if d.get("geography") is not None:
-        kwargs["geography"] = d["geography"]
-    return ExclusionSelector(**kwargs)
-
-
-def _load_exclusions(card_key: str) -> tuple[Exclusion, ...]:
-    card = next(c for c in CARDS if c["key"] == card_key)
-    return tuple(
-        Exclusion(
-            key=e["key"], selector=_exclusion_selector_from_dict(e["selector"]),
-            excluded_from=tuple(e["excluded_from"]), note=e.get("note"),
-        )
-        for e in card.get("exclusions", [])
-    )
+def _load_exclusions(card_key: str) -> tuple:
+    return bundle_from_dict(_card_dict(card_key)).exclusions
 
 
 def _load_surcharges(card_key: str) -> tuple[Surcharge, ...]:
-    card = next(c for c in CARDS if c["key"] == card_key)
-    return tuple(
-        Surcharge(
-            key=s["key"], selector=_selector_from_dict(s["selector"]),
-            rate=Decimal(str(s["rate"])), gst_on_surcharge=Decimal(str(s["gst_on_surcharge"])),
-        )
-        for s in card.get("surcharges", [])
-    )
-
-
-def _accrual_from_dict(d: dict, currency: str) -> Accrual:
-    if d["type"] == "percentage":
-        return Accrual(type="percentage", currency=currency, rate=Decimal(str(d["rate"])), rounding=d["rounding"])
-    if d["type"] == "per_unit":
-        return Accrual(
-            type="per_unit", currency=currency,
-            unit_amount=Decimal(str(d["unit_amount"])), points_per_unit=Decimal(str(d["points_per_unit"])),
-            rounding=d["rounding"],
-        )
-    raise ValueError(f"golden adapter: unsupported accrual type {d['type']!r}")
+    return bundle_from_dict(_card_dict(card_key)).surcharges
 
 
 def _load_card_rules(card_key: str):
     """Returns (earning_rules, accruals, caps) -- `caps` mixes reward- and
     spend-measure caps; callers filter by `.measure` for whichever
     downstream function (apply_caps vs apply_incremental_bands) they need."""
-    card = next(c for c in CARDS if c["key"] == card_key)
-    cap_defs = {c["key"]: c for c in card.get("caps", [])}
-
-    # The raw seed schema has no tier_mode field at all (not even a
-    # seed.py INSERT column) -- syn_slab's incremental rules are only
-    # identifiable by their rule_group containing a spend-measure cap
-    # SOMEWHERE in it (slab3 itself is uncapped, but shares rule_group
-    # "slab" with slab1/slab2, which are). Inferred here rather than
-    # trusting an explicit field that doesn't exist yet.
-    incremental_groups = set()
-    for er in card["earning_rules"]:
-        group = er.get("rule_group")
-        if group is None:
-            continue
-        for cap_key in er.get("caps", []):
-            if cap_defs[cap_key]["measure"] == "spend":
-                incremental_groups.add(group)
-
-    earning_rules = []
-    accruals: dict[str, Accrual] = {}
-    for er in card["earning_rules"]:
-        selector = _selector_from_dict(er.get("selector", {}))
-        group = er.get("rule_group")
-        earning_rules.append(EarningRule(
-            key=er["key"], selector=selector,
-            priority=er.get("priority", 10), stacks_with_base=er.get("stacks_with_base", False),
-            rule_group=group, requires_activation=er.get("requires_activation", False),
-            tier_mode="incremental" if group in incremental_groups else None,
-        ))
-        # seed.py itself stamps accrual["currency"] = card["currency"] before
-        # inserting (the raw fixture dicts always carry currency: None) --
-        # mirrored here so the golden adapter matches what actually gets seeded.
-        accruals[er["key"]] = _accrual_from_dict(er["accrual"], card["currency"])
-
-    caps = []
-    for er in card["earning_rules"]:
-        for cap_key in er.get("caps", []):
-            cd = cap_defs[cap_key]
-            window = Window(kind=cd["window_def"]["kind"], alignment=cd["window_def"].get("alignment"))
-            caps.append(Cap(
-                key=cd["key"], rule_key=er["key"], measure=cd["measure"],
-                amount=Decimal(str(cd["amount"])), window=window,
-                scope=cd["scope"], overflow=cd["overflow"],
-            ))
-
-    return tuple(earning_rules), accruals, tuple(caps)
-
-
-def _payload_from_dict(d: dict) -> Payload:
-    return Payload(
-        type=d["type"],
-        amount=Decimal(str(d["amount"])) if "amount" in d else None,
-        currency=d.get("currency"),
-        benefit=d.get("benefit"),
-        fee=d.get("fee"),
-        quantity=d.get("quantity"),
-        window=Window(kind=d["window"]["kind"], alignment=d["window"].get("alignment")) if "window" in d else None,
-        condition=d.get("condition"),
-        rule=d.get("rule"),
-        application=d.get("application"),
-    )
-
-
-def _threshold_from_dict(d: dict) -> Threshold:
-    basis_dict = d["basis"]
-    basis = ThresholdBasis(
-        measure=basis_dict["measure"],
-        window=Window(kind=basis_dict["window"]["kind"], alignment=basis_dict["window"].get("alignment")),
-        selector_override=_selector_from_dict(basis_dict["selector_override"]) if basis_dict.get("selector_override") else None,
-    )
-    tiers = tuple(
-        Tier(tier_index=t["tier_index"], threshold_amount=Decimal(str(t["threshold_amount"])), payload=_payload_from_dict(t["payload"]))
-        for t in d["tiers"]
-    )
-    return Threshold(key=d["key"], basis=basis, tier_mode=d["tier_mode"], tiers=tiers)
+    bundle = bundle_from_dict(_card_dict(card_key))
+    return bundle.earning_rules, bundle.accruals, bundle.caps
 
 
 def _load_thresholds(card_key: str) -> tuple[Threshold, ...]:
-    card = next(c for c in CARDS if c["key"] == card_key)
-    return tuple(_threshold_from_dict(t) for t in card.get("thresholds", []))
-
-
-def _benefit_from_dict(d: dict) -> Benefit:
-    return Benefit(
-        key=d["key"], kind=d["kind"], unit_label=d.get("unit_label"),
-        entitlement=Decimal(str(d["entitlement"])) if "entitlement" in d else None,
-        entitlement_window=(
-            Window(kind=d["entitlement_window"]["kind"], alignment=d["entitlement_window"].get("alignment"))
-            if "entitlement_window" in d else None
-        ),
-        qualification_threshold_key=d.get("qualification_threshold_key"),
-        face_value=Decimal(str(d["face_value"])) if "face_value" in d else None,
-    )
+    return bundle_from_dict(_card_dict(card_key)).thresholds
 
 
 def _load_benefits(card_key: str) -> dict[str, Benefit]:
-    card = next(c for c in CARDS if c["key"] == card_key)
-    return {b["key"]: _benefit_from_dict(b) for b in card.get("benefits", [])}
-
-
-def _route_from_dict(d: dict) -> RedemptionRoute:
-    return RedemptionRoute(
-        key=d["key"], route_type=d["route_type"],
-        ratio=Decimal(str(d["ratio"])) if "ratio" in d else None,
-        friction=Decimal(str(d["friction_default"])) if "friction_default" in d else None,
-        min_points=Decimal(str(d["min_points"])) if "min_points" in d else None,
-        transfer_partner=d.get("transfer_partner"),
-        transfer_ratio=Decimal(str(d["transfer_ratio"])) if "transfer_ratio" in d else None,
-        partner_point_value=Decimal(str(d["partner_point_value"])) if "partner_point_value" in d else None,
-    )
+    return bundle_from_dict(_card_dict(card_key)).benefits
 
 
 def _load_currencies() -> dict[str, RewardCurrency]:
-    return {c["key"]: RewardCurrency(key=c["key"], routes=tuple(_route_from_dict(r) for r in c["routes"])) for c in CURRENCIES}
+    return currencies_from_dicts(CURRENCIES)
 
 
 def _parse_spend_annual(spend_annual: dict, seasonality: dict | None = None) -> SpendInput:

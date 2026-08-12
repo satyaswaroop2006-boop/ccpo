@@ -54,9 +54,23 @@ decision in `docs/DECISIONS.md` (create on first use).
       fixture), #27 (trace is a flat list, not C.10's full node schema),
       plus mcc/networks/txn/date selector fields still unsupported (only
       categories/channels/merchant_group/geography are).
-- [ ] Phase 3 — `/evaluate`, `/next-best-spend`. Breakpoint *compiler* is
-      already done (`breakpoints.py`, previous line); the repair *pass*
-      that walks its output is Phase 4 (`optimiser/repair.py` per E.0).
+- [x] Phase 3 — `POST /evaluate` + `POST /next-best-spend` built and
+      tested (199/199 tests green): `engine/card_bundle.py` (card-dict ->
+      engine-dataclass loader, extracted from the golden battery's
+      adapters, zero behaviour change) + `engine/evaluate.py`
+      (`evaluate_card`, the Stage 1-11 pipeline composition, verified
+      against all 12 goldens) + `app/schemas.py`/`app/repository.py`/
+      `app/main.py`. **Not yet done**: `PostgresCardRepository` —
+      `SyntheticCatalogRepository` (seeds/synthetic_cards.py-backed) is
+      the only `CardRepository` today because `compute/.env`'s
+      `DATABASE_URL` doesn't resolve from the dev sandbox (docs/
+      DECISIONS.md #62) — carried-forward next task once a reachable
+      connection string is confirmed, along with `evaluation_runs`/
+      `evaluation_traces` persistence. `/next-best-spend` is an annual
+      marginal-delta MVP, not wallet mid-year state (#61, folded into
+      #10's deferral) — the repair *pass* over the breakpoint compiler
+      (already done, `breakpoints.py`) is separately Phase 4
+      (`optimiser/repair.py` per E.0).
 - [ ] Phase 4 — optimiser (E.2–E.9), `/optimise`, repair pass
 - [ ] Phase 5 — real card ingestion (Part I workflow)
 - [ ] Phase 6 — frontend (Part F, to be authored)

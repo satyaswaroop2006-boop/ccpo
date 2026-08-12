@@ -5,17 +5,18 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (commit 9408f25 + syn_retro/syn_renewal goldens)
+## Status as of 2026-08-12 (commit 0536595 + Phase 3 /evaluate, /next-best-spend)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
-177/177 tests green. 12/12 synthetic cards have a passing golden -- full
-C.9 coverage (syn_ecom, syn_flat, syn_fuel, syn_lounge, syn_miles,
-syn_points, syn_renewal, syn_retro, syn_slab, syn_travel, syn_upi,
-syn_waiver). No blocking deferrals -- 9 non-blocking items remain open
-(table below); none of them gate Phase 2 sign-off or starting Phase 3.
+177/177 tests green, 12/12 synthetic cards have a passing golden -- full
+C.9 coverage. Phase 3 (this entry): `engine/evaluate.py`'s `evaluate_card`
+orchestrator, `POST /evaluate` and `POST /next-best-spend` wired in
+`app/main.py`, backed by `SyntheticCatalogRepository` -- 199/199 tests
+green. No blocking deferrals -- 10 non-blocking items remain open (table
+below); none of them gate this work or starting Phase 4.
 
 **Genuinely open items** (none blocking today's work; listed so a future
-session doesn't have to scan all 54 entries below to find them):
+session doesn't have to scan all entries below to find them):
 
 | # | Item | Why it's still open |
 |---|---|---|
@@ -26,7 +27,8 @@ session doesn't have to scan all 54 entries below to find them):
 | #19 | Flat per-currency `RedemptionFees` (A.12) | Not modelled anywhere; no route in the seed catalog carries one |
 | #27 | Explanation trace is a flat line-item list | Not C.10's full per-node schema (`cap_state`, per-currency `v`/`phi`, `source_refs`) — a real fidelity gap, flagged for a follow-up pass if §37/§74 need it soon |
 | #29 | `WelcomeValue` has no real fixture | Parameter exists in `assemble_nacv`, always 0 in practice — no card/schema payload type for welcome bonuses |
-| #10 | True anniversary alignment | Approximated as calendar-aligned; needs `card_anniversary_month` from wallet mode (not built) |
+| #10, #61 | True anniversary alignment; wallet mid-year state (`current_year_progress`) | Approximated as calendar-aligned; needs `card_anniversary_month` AND a way to seed already-triggered threshold/cap state, neither built (wallet mode itself doesn't exist yet) |
+| #62 | `PostgresCardRepository` not built | `DATABASE_URL` doesn't resolve from the dev sandbox; no local Postgres/Docker to verify against either. `SyntheticCatalogRepository` is the only `CardRepository` implementation |
 | — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
 
 **Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
@@ -36,6 +38,9 @@ geography-aware selectors (#4, resolved #51-54), `PV` = NACV for a single
 card, not a separate output (#28), `CategorySpend.merchant_group` input
 path (#5, resolved #55-56), `condition: "on_renewal"` year-mode filtering
 (#14, resolved #59-60). All 12/12 synthetic cards now have a golden.
+`/evaluate` + `/next-best-spend` MVP scope confirmed with Satya (#63):
+synthetic-catalog-backed for now, annual marginal-delta (not wallet
+mid-year) for Next-Best-Spend.
 
 ---
 
@@ -1133,3 +1138,108 @@ hasn't fully kicked in, there is no renewal bonus yet, and the joining fee
 stings on top of the annual fee. 3yr = -1,177.50+2*3,092.50 = Rs5,007.50.
 177/177 tests total (11th and 12th goldens) -- full 12/12 C.9 golden
 coverage reached.
+
+---
+
+## 2026-08-12 -- Phase 3: `engine/evaluate.py` orchestrator, `POST /evaluate`,
+`POST /next-best-spend` (Part E SS E.0/E.1/E.5/E.12)
+
+Two scope decisions confirmed with Satya before writing any endpoint code
+(both via plan-mode discussion, not silently picked):
+
+### 61. `/next-best-spend` scope: annual marginal-delta MVP, not wallet
+mid-year state
+
+E.5/E.12 describe Next-Best-Spend seeded by wallet mode's
+`current_year_progress` (mid-year state: what's already happened this
+year, per-threshold spend to date). That machinery doesn't exist anywhere
+in the engine -- wallet mode itself isn't built (extends #10's existing
+anniversary-alignment gap: both need a "where are we in this card's year"
+concept that doesn't exist yet). Building it now would mean designing how
+to seed already-triggered threshold/cap state and evaluate only the
+remaining months of the year -- a real new engine feature, not an endpoint
+wiring task, and nothing in C.9's catalogue currently needs it.
+
+Confirmed scope instead: given a full annual spend profile (the same
+shape `/evaluate` already takes), compute the exact incremental steady-
+state NACV of routing +Δ (default ₹1k/10k/50k) to a category on a
+candidate card -- two `evaluate_card` calls (baseline, baseline+Δ), zero
+new engine capability. This is still a genuine, useful slice of E.12's
+"marginal bands" idea (§39's kink-annotated marginal value curve), just
+without the mid-year seeding. True wallet state stays open (folded into
+#10's table row, not a new orphaned topic) until a wallet-mode pass
+actually needs it end-to-end -- same "additive when needed" posture as
+every prior deferral resolution in this log.
+
+### 62. `PostgresCardRepository` deliberately not built this pass
+
+`compute/.env`'s `DATABASE_URL` points at a Supabase project host
+(`db.<ref>.supabase.co`) that fails DNS resolution from the dev sandbox --
+general internet DNS resolves fine (`google.com`, `supabase.com`), so it's
+specific to that host, most likely Supabase's direct-connection endpoint
+requiring IPv6 that this sandbox's resolver can't reach (the fix is
+probably swapping to Supabase's IPv4 connection-pooler host). No local
+Postgres or Docker is available in the sandbox either, so there is no way
+to write and verify DB-reading code here -- confirmed with Satya: fix
+connectivity before that path is built, rather than ship queries that
+were never actually run (CLAUDE.md: "never claim something works without
+having run it").
+
+`app/repository.py`'s `CardRepository` protocol is intentionally the seam
+this decision implies: `SyntheticCatalogRepository` (backed by
+`seeds/synthetic_cards.py`, the same fixtures the golden battery uses) is
+the only implementation today; a `PostgresCardRepository` reading
+`card_versions`/`earning_rules`/`caps`/`thresholds`/`threshold_tiers`/
+`exclusions`/`benefits`/`surcharges`/`reward_currencies`/
+`redemption_routes` (per `supabase/migrations/0001_init.sql`, assembling
+the same dict shape `engine/card_bundle.bundle_from_dict` already
+consumes -- see #63) is the explicit next task once a reachable connection
+string is confirmed, not attempted blind. `evaluation_runs`/
+`evaluation_traces` row persistence is the same blocker, also deferred.
+
+### 63. `engine/card_bundle.py` extracted from `tests/test_goldens.py`'s
+five private adapter functions -- zero behaviour change, proven by the
+unchanged 12 goldens
+
+The golden battery's `_load_card_rules`/`_load_thresholds`/`_load_benefits`/
+`_load_currencies`/`_load_exclusions`/`_load_surcharges` were the ONE
+translation from a raw card dict into engine dataclasses, but lived as
+test-only code. `/evaluate` needs that exact same translation (today from
+`seeds/synthetic_cards.py`, tomorrow from Postgres per #62) -- rather than
+writing a second copy (real risk of the two silently drifting in
+interpretation, e.g. one adapter handling a selector field the other
+forgets), moved it verbatim into `engine/card_bundle.py`
+(`bundle_from_dict`/`currencies_from_dicts`) and had the test file's
+`_load_*` functions become thin wrappers delegating to it. All 12 golden
+tests pass completely unchanged -- the regression proof the extraction
+didn't alter behaviour, not a rewrite.
+
+`engine/evaluate.py`'s `evaluate_card` is the pipeline composition itself
+(normalise -> eligibility -> match -> accrue -> caps/incremental-bands ->
+thresholds -> apply_rule_activations -> valuation -> benefits -> costs ->
+year-mode split -> assemble_nacv) -- exactly what every golden test's body
+already ran by hand, consolidated into one call. `tests/
+test_evaluate_orchestrator.py` runs it against all 12 synthetic cards and
+asserts the output matches each golden's `expected` block exactly -- 13/13
+pass on the first run, no numbers needed adjusting, which is the strongest
+evidence the consolidation is faithful (not just "it runs", but "it
+reproduces 12 independently hand-verified answers").
+
+`POST /evaluate` and `POST /next-best-spend` (`app/main.py`) are thin
+handlers over `evaluate_card` (CLAUDE.md rule 1: no financial math in API
+handlers). Manually smoke-tested live (`uvicorn app.main:app`): a
+`syn_ecom`-equivalent `/evaluate` POST reproduced `golden_syn_ecom_
+basic.json`'s numbers exactly (gross reward ₹14,400, NACV steady-state
+₹14,400, Year-1 ₹13,810, 3yr ₹42,610). `/next-best-spend`'s diminishing-
+returns behaviour was hand-verified against `syn_ecom`'s own `cap_ecom`
+kink (`tests/test_next_best_spend.py`): a ₹10,000 delta to ecommerce/
+online nets a flat 5% (₹500, under the cap), a ₹3,00,000 delta nets only
+4.2% (₹12,600 -- 12 months of 20,000 capped @5% + 5,000 overflow re-rated
+@1% base, the exact `overflow: base_rate` mechanic `golden_syn_ecom_
+basic.json` already verifies) -- the same kink `breakpoints.py` compiles
+as a spend-domain breakpoint (Sbar = Cap/rate = ₹20,000/mo), demonstrated
+here without depending on that module.
+
+199/199 tests green (177 Phase 2 + 13 orchestrator-vs-golden + 6 API + 3
+next-best-spend). Phase 3 complete for the synthetic-catalog path;
+`PostgresCardRepository` (#62) is the carried-forward next task.
