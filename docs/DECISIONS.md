@@ -11,7 +11,8 @@ Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
 177/177 tests green. 12/12 synthetic cards have a passing golden -- full
 C.9 coverage (syn_ecom, syn_flat, syn_fuel, syn_lounge, syn_miles,
 syn_points, syn_renewal, syn_retro, syn_slab, syn_travel, syn_upi,
-syn_waiver).
+syn_waiver). No blocking deferrals -- 9 non-blocking items remain open
+(table below); none of them gate Phase 2 sign-off or starting Phase 3.
 
 **Genuinely open items** (none blocking today's work; listed so a future
 session doesn't have to scan all 54 entries below to find them):
