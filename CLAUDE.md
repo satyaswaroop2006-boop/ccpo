@@ -116,10 +116,25 @@ decision in `docs/DECISIONS.md` (create on first use).
       exactly the 3 expected subsets, each cross-checked against slice 1's
       own hand-computed numbers, best-of-three correctly matches the
       2-card subset. 227/227 tests green.
-      **Remaining build order** (#68): `optimiser/candidates.py` (E.2,
-      pre-filtering) → `optimiser/frontier.py` + `optimiser/classify.py`
-      (E.8–E.9) → `optimiser/scenarios.py` (E.11) →
-      `optimiser/explain.py` (E.12) + `POST /optimise`.
+      **Slice 4 done**: `optimiser/candidates.py` (E.2, pre-filtering) —
+      builds Part B SS B.7's two-part coverage guarantee: standalone
+      value (top-8 by `allocate`+`repair`'s exact single-card `pv_exact`
+      — deliberately not a raw `evaluate_card` call, since a card's true
+      standalone value can route negative-margin spend to `c0`) union
+      per-category champions (top-2 by marginal rate, Part A SS A.15's
+      `MV(c,k,Δ)` formula so the fixed annual fee cancels out of the
+      comparison). No MABC (SS E.2's own addition beyond SS B.7, needs a
+      "force spend to a tier" construct nothing builds) and no hard
+      include/exclude from wallet/constraints (#75/#76, same blockers as
+      #73). Verified: standalone ranking and category-champion ranking
+      both match hand computation exactly; two scenarios with an
+      artificially tight `standalone_n`/`max_total` demonstrate the
+      union/trim mechanics concretely (a tight standalone cut still gets
+      rescued by champions; trimming only ever removes a standalone-only,
+      non-champion card). 231/231 tests green.
+      **Remaining build order** (#68): `optimiser/frontier.py` +
+      `optimiser/classify.py` (E.8–E.9) → `optimiser/scenarios.py`
+      (E.11) → `optimiser/explain.py` (E.12) + `POST /optimise`.
 - [ ] Phase 5 — real card ingestion (Part I workflow)
 - [ ] Phase 6 — frontend (Part F, to be authored)
 

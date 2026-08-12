@@ -5,7 +5,7 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (Phase 4 slice 3 -- optimiser/enumerate.py)
+## Status as of 2026-08-12 (Phase 4 slice 4 -- optimiser/candidates.py)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
 177/177 tests green, 12/12 synthetic cards have a passing golden -- full
@@ -15,8 +15,10 @@ wired in `app/main.py`, live-backed by `PostgresCardRepository`. Phase 4
 in progress: `optimiser/allocate.py` (slice 1, the inner MILP for a fixed
 card subset) + `optimiser/repair.py` (slice 2, exact evaluation +
 near-miss threshold repair) + `optimiser/enumerate.py` (slice 3, subset
-generation over both) -- 227/227 tests green. No blocking deferrals -- 11
-non-blocking items remain open (table below); none of them gate this work.
+generation over both) + `optimiser/candidates.py` (slice 4, pre-filtering
+the card universe down to enumeration's input) -- 231/231 tests green. No
+blocking deferrals -- 12 non-blocking items remain open (table below);
+none of them gate this work.
 
 **Genuinely open items** (none blocking today's work; listed so a future
 session doesn't have to scan all entries below to find them):
@@ -34,6 +36,7 @@ session doesn't have to scan all entries below to find them):
 | #68 | `optimiser/allocate.py`: milestones/waiver/fees/benefit-dedup/card-selection/incremental-tier/rule_group-and-card-scoped-caps/quarterly-and-annual-reward-caps | This slice is continuous-variables-only (B.2's `x`,`s`); every binary-needing mechanic and every cap shape beyond scope="rule"+monthly-window is the explicit next increment, not silently dropped -- see #70 |
 | #71 | `optimiser/repair.py`: no "barely-made" variants, no cap breakpoints, top-up sourced from `c0` only | Each is a real design surface deferred, not an oversight -- barely-made needs a cost model for what a card's excess spend gives up elsewhere; cap breakpoints are already optimal by construction in `allocate.py`'s LP; pulling top-up from a real card (not just `c0`) needs the same cost model barely-made does -- see #72 |
 | #73 | `optimiser/enumerate.py`: no wallet-mode inclusion, no infeasibility filtering, no bound pruning, no caching, no parallelism | Full-sweep only this slice -- wallet mode and user-constraint machinery (must-keep/refuse/fee-budget) don't exist anywhere yet; bound pruning needs SS E.2's MABC ceiling (not built) and is explicitly a scale optimisation the spec says is irrelevant below the current <=12-card catalog; caching needs DB persistence nothing writes yet -- see #74 |
+| #75 | `optimiser/candidates.py`: no MABC, no hard include/exclude, no `constraints_snapshot` persistence | MABC is SS E.2's own addition beyond SS B.7's core spec (SS B.7 doesn't mention it), needing a "force eligible spend to a tier" construct that doesn't exist; hard include/exclude needs wallet mode and user constraints (same blocker as #73); persistence needs DB writes nothing does yet -- see #76 |
 | — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
 
 **Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
@@ -1678,3 +1681,101 @@ correctly returns only the two size-1 subsets, no pair. An unknown
 unknown vocabulary elsewhere.
 
 227/227 tests green (223 prior + 4 new).
+
+---
+
+## 2026-08-12 -- Phase 4 slice 4: `optimiser/candidates.py`, pre-filtering
+(Part E SS E.2, Part B SS B.7)
+
+### 76. Builds SS B.7's two-part coverage guarantee (standalone + category
+champions), defers SS E.2's MABC and hard include/exclude
+
+SS B.7 defines pre-filtering as a union of exactly three things: top-N
+standalone value, per-category champions, and user-constraint-required
+cards, with an explicit warning about the first alone: "naive pre-
+filtering by standalone value is biased -- it drops specialist cards...
+whose standalone value is low but whose incremental value inside a
+portfolio is high." Standalone + champions together are what actually
+delivers that guarantee; this pass builds both. Deferred, each because
+the machinery it needs doesn't exist yet:
+
+- **MABC** (SS E.2 step 5) -- "for each threshold tier of each card,
+  exact-evaluate the card with eligible spend forced to the tier." SS
+  B.7 itself doesn't mention MABC at all -- it's SS E.2's own later
+  addition on top of the core spec, needing a "force eligible spend to
+  exactly this tier" evaluation construct nothing builds. A real,
+  legitimate refinement (catches a card whose value comes from a big
+  milestone jump rather than a strong steady per-rupee rate), but
+  additive to the coverage guarantee, not part of it.
+- **Hard include/exclude** (wallet cards, must-keep, refuse-use, "at
+  least 1 RuPay") -- needs wallet mode and user-constraint machinery,
+  neither of which exists (same blocker as #73).
+- **`optimisation_runs.constraints_snapshot` persistence** -- needs DB
+  writes nothing does yet (#62/#73's same blocker). The "why was card X
+  considered" explainability SS E.2 asks for is still produced --
+  `CandidateSelection.standalone_ranked` and `.champions` carry it --
+  just returned in-memory rather than written to a row.
+
+### 77. Standalone value MUST go through `allocate`+`repair`, not a raw
+`evaluate_card` call; category-champion marginal rate is a true delta,
+not an average, specifically so the fixed fee cancels out
+
+Two design choices worth recording rather than picking silently:
+
+**Standalone value uses the LP.** SS B.7 itself calls this "a cheap
+single-card LP, no enumeration" -- not simply "evaluate the card with all
+spend forced onto it." The reason surfaced concretely from `tests/
+test_allocate.py`'s own `syn_fuel` scenario (Phase 4 slice 1): a single
+card's TRUE standalone value can route part of the user's spend to `c0`
+when that card's margin on some category is negative (there, fuel spend
+past `fuel_refund`'s cap, net -0.68%/rupee after its own surcharge).
+Forcing all spend onto the card regardless would understate standalone
+value for any surcharge- or negative-margin-heavy card. `_standalone_
+value` therefore calls `allocate([bundle], ...)` then `repair([bundle],
+...)`, exactly the single-card-subset path slices 1-2 already proved
+correct, not a shortcut around it.
+
+**Category-champion rate is `MV(c,k,delta) = Evaluator(baseline+delta) -
+Evaluator(baseline)` (Part A SS A.15's own formula), never `NACV(category
+spend) / category spend`.** The card's fixed annual fee is identical in
+both evaluations (assuming `delta` doesn't itself cross a waiver
+threshold, which the Rs10,000 default is chosen small enough to avoid in
+every scenario this pass's fixtures exercise) and cancels exactly in the
+subtraction -- an average-inclusive-of-fixed-costs rate would instead
+make ANY card with an unwaived annual fee look artificially worse at
+small category amounts, exactly the kind of smoothed-number bias SS E.2
+insists candidate selection avoid ("steps 3-5 all use the exact
+evaluator, so no card is ever excluded on smoothed numbers"). `delta =
+Rs10,000` reuses Phase 3's `/next-best-spend` delta-band convention
+rather than inventing a new one. This is a direct `evaluate_card` call,
+no `allocate`/`repair` needed -- evaluating one category on one card in
+isolation is not a cross-card allocation decision, so there's nothing for
+an LP to decide; a negative marginal rate is itself a valid,
+correctly-informative "this card is a bad specialist pick for this
+category" signal, not a case needing special handling.
+
+### Verification
+
+`tests/test_candidates.py`, universe `{syn_ecom, syn_flat, syn_miles}`,
+spend ecommerce/online Rs6,00,000/yr + utilities Rs30,000/yr (both clear
+the Rs25,000 champion threshold). Standalone values hand-computed exactly:
+`syn_ecom` Rs15,900.00, `syn_flat` Rs9,450.00, `syn_miles` Rs1,350.00
+(reward Rs3,150 via the "stmt" route + milestone Rs10,000 for the
+4,00,000 tier, minus a steady fee of Rs11,800 since this card has no
+waiver threshold at all). Champions on both categories: `syn_flat`
+(1.5%, flat, unconditional) then `syn_ecom` (1% -- notably NOT its 5%
+accelerated rate: at a Rs6,00,000 baseline the marginal Rs10,000 already
+lands in syn_ecom's own overflow zone, past its own Rs20,000/mo cap-
+equivalent), `syn_miles` never makes the top-2 (0.5%, well behind both).
+Two scenarios use an artificially tight `standalone_n`/`max_total`
+specifically to make the union/trim mechanics visible with real numbers
+(the current 12-card catalog's economics don't happen to produce a
+"hidden specialist beats the generalists outright" story --
+`syn_flat`'s fee-free flat 1.5% is simply strong across the board in this
+fixture set, a property of the fixtures rather than a gap in the
+algorithm): `standalone_n=1` still rescues `syn_flat` into the final
+candidate set via the champions union; `standalone_n=3, max_total=2`
+trims exactly `syn_miles` (the only standalone-only, lowest-ranked entry)
+while protecting both champions.
+
+231/231 tests green (227 prior + 4 new).
