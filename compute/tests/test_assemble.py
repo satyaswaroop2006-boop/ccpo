@@ -11,7 +11,7 @@ Expected values are hand-computed constants (CLAUDE.md rule 1).
 """
 from decimal import Decimal
 
-from engine.assemble import assemble_nacv, value_milestone_grants
+from engine.assemble import assemble_nacv, value_milestone_grants, value_milestone_grants_by_year_mode
 from engine.benefits import BenefitValuation
 from engine.thresholds import Payload, ThresholdEvent
 from engine.valuation import RedemptionRoute, RewardCurrency
@@ -131,6 +131,59 @@ def test_grant_entitlement_and_waive_fee_excluded_from_milestone_value():
     total, lines = value_milestone_grants([entitlement_event, waiver_event], currencies={}, primary_routes={}, voucher_valuations={})
     assert total == Decimal("0")
     assert lines == ()
+
+
+def test_year_mode_split_drops_on_renewal_grant_from_year1_only():
+    # syn_renewal's real tiers: activate_rule (not a milestone payload type
+    # at all, contributes 0 to either total) + grant_points condition=on_renewal.
+    activate_event = ThresholdEvent(
+        threshold_key="anniv", tier_index=1, window_months=tuple(range(1, 13)), pooled_spend=Decimal("540000"),
+        payload=Payload(type="activate_rule", rule="dining_2x", application="prospective"),
+    )
+    grant_event = ThresholdEvent(
+        threshold_key="anniv", tier_index=2, window_months=tuple(range(1, 13)), pooled_spend=Decimal("540000"),
+        payload=Payload(type="grant_points", amount=Decimal("10000"), currency="synth_points", condition="on_renewal"),
+    )
+    steady_total, steady_lines, year1_total, year1_lines = value_milestone_grants_by_year_mode(
+        [activate_event, grant_event], currencies={"synth_points": SYNTH_POINTS}, primary_routes={"synth_points": "stmt"}, voucher_valuations={},
+    )
+    assert steady_total == Decimal("2500")  # 10,000 * 0.25 (stmt ratio)
+    assert len(steady_lines) == 1
+    assert year1_total == Decimal("0")  # on_renewal grant dropped, activate_rule was never counted anyway
+    assert year1_lines == ()
+
+
+def test_year_mode_split_unfiltered_when_no_on_renewal_condition():
+    event = ThresholdEvent(
+        threshold_key="t1", tier_index=1, window_months=tuple(range(1, 13)), pooled_spend=Decimal("200000"),
+        payload=Payload(type="grant_cashback", amount=Decimal("500"), currency="cashback_inr"),
+    )
+    steady_total, _, year1_total, _ = value_milestone_grants_by_year_mode(
+        [event], currencies={"cashback_inr": CASHBACK_INR}, primary_routes={}, voucher_valuations={},
+    )
+    assert steady_total == year1_total == Decimal("500")
+
+
+def test_assemble_nacv_milestone_value_year1_defaults_to_milestone_value():
+    result_default = assemble_nacv(
+        gross_reward=Decimal("1000"), milestone_value=Decimal("2000"), benefit_value=Decimal("0"),
+        steady_fee=Decimal("0"), year1_fee=Decimal("0"),
+    )
+    result_explicit = assemble_nacv(
+        gross_reward=Decimal("1000"), milestone_value=Decimal("2000"), benefit_value=Decimal("0"),
+        steady_fee=Decimal("0"), year1_fee=Decimal("0"), milestone_value_year1=Decimal("2000"),
+    )
+    assert result_default.year_1 == result_explicit.year_1 == Decimal("3000")
+
+
+def test_assemble_nacv_milestone_value_year1_diverges_from_steady_state():
+    result = assemble_nacv(
+        gross_reward=Decimal("2362.50"), milestone_value=Decimal("2500"), benefit_value=Decimal("0"),
+        steady_fee=Decimal("1770.00"), year1_fee=Decimal("3540.00"), milestone_value_year1=Decimal("0"),
+    )
+    assert result.steady_state == Decimal("3092.50")  # 2362.50+2500-1770
+    assert result.year_1 == Decimal("-1177.50")  # 2362.50+0-3540
+    assert result.three_year == Decimal("5007.50")  # -1177.50 + 2*3092.50
 
 
 def test_multiple_grants_sum_together():

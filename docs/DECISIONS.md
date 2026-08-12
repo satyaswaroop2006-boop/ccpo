@@ -5,12 +5,13 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (commit 46684fb + syn_points/syn_flat/syn_waiver goldens)
+## Status as of 2026-08-12 (commit 9408f25 + syn_retro/syn_renewal goldens)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
-171/171 tests green. 10/12 synthetic cards have a passing golden (syn_ecom,
-syn_flat, syn_fuel, syn_lounge, syn_miles, syn_points, syn_slab,
-syn_travel, syn_upi, syn_waiver).
+177/177 tests green. 12/12 synthetic cards have a passing golden -- full
+C.9 coverage (syn_ecom, syn_flat, syn_fuel, syn_lounge, syn_miles,
+syn_points, syn_renewal, syn_retro, syn_slab, syn_travel, syn_upi,
+syn_waiver).
 
 **Genuinely open items** (none blocking today's work; listed so a future
 session doesn't have to scan all 54 entries below to find them):
@@ -21,20 +22,19 @@ session doesn't have to scan all 54 entries below to find them):
 | #11, #43 | Multi-category pooled cap / incremental-band windows | Raise rather than guess an attribution scheme; no fixture needs one yet |
 | #9, #32 | Spend-measure caps: only `scope="rule"` supported | `syn_slab` only needs `rule` scope; `rule_group`/`card`-scoped spend-measure caps untested and unimplemented |
 | #12, #39 | Caps × `activate_rule` interaction | Identity-based splice + Stage-5-before-Stage-6/7 ordering wouldn't reconcile if a future rule combines both; no current card does |
-| #14 | `condition: "on_renewal"` carried through unfiltered | No year-mode (Year-1 vs. renewal-year) filtering exists; that's C.4.2/Stage 11 territory, not built |
 | #19 | Flat per-currency `RedemptionFees` (A.12) | Not modelled anywhere; no route in the seed catalog carries one |
 | #27 | Explanation trace is a flat line-item list | Not C.10's full per-node schema (`cap_state`, per-currency `v`/`phi`, `source_refs`) — a real fidelity gap, flagged for a follow-up pass if §37/§74 need it soon |
 | #29 | `WelcomeValue` has no real fixture | Parameter exists in `assemble_nacv`, always 0 in practice — no card/schema payload type for welcome bonuses |
 | #10 | True anniversary alignment | Approximated as calendar-aligned; needs `card_anniversary_month` from wallet mode (not built) |
 | — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
-| — | 2 synthetic cards without a golden | syn_renewal, syn_retro |
 
 **Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
 `activate_rule` prospective/retroactive (#13, resolved #36-40), `syn_slab`
 fill-order for `rule`-scope bands (#9, resolved #41-45, #45-update),
 geography-aware selectors (#4, resolved #51-54), `PV` = NACV for a single
 card, not a separate output (#28), `CategorySpend.merchant_group` input
-path (#5, resolved #55-56).
+path (#5, resolved #55-56), `condition: "on_renewal"` year-mode filtering
+(#14, resolved #59-60). All 12/12 synthetic cards now have a golden.
 
 ---
 
@@ -317,6 +317,9 @@ the pipeline built so far has a year_index concept (that's C.4.2 / Stage
 (`test_on_renewal_condition_carried_through_unfiltered`). Whichever stage
 eventually assembles Year-1 vs steady-state values (Stage 11 per C.4) is
 the right place to apply this filter; thresholds.py stays year-agnostic.
+
+**RESOLVED 2026-08-12** -- see entries #59-60 below. `golden_syn_renewal_
+year_divergence.json` now exercises the year-mode filter end-to-end.
 
 ### 15. `caps.py`'s window helpers made public for reuse
 
@@ -1051,3 +1054,81 @@ NACV steady-state = 4,200.00-1,178.82 = Rs3,021.18. Year-1 = 4,200.00-
 2,357.64 = Rs1,842.36. 3yr = 1,842.36+2*3,021.18 = Rs7,884.72.
 171/171 tests total (9th and 10th goldens). Only syn_renewal and syn_retro
 remain unwired.
+
+---
+
+## 2026-08-12 -- Year-mode split (Part C SS C.3, Part A SS A.12), resolving
+#14; wire golden_syn_retro_tiers.json (C.9 Example 6) and
+golden_syn_renewal_year_divergence.json (C.9 Example 12) -- 12/12 golden coverage
+
+### 59. `assemble.py` gains `value_milestone_grants_by_year_mode` +
+`assemble_nacv(milestone_value_year1=...)` -- additive, not a signature break
+
+#14 flagged Stage 11 as "the right place" for `condition: "on_renewal"`
+filtering back on 2026-08-11, without picking an exact mechanism. Landed
+on the narrowest addition that keeps every existing call site byte-for-
+byte unchanged: `value_milestone_grants_by_year_mode` runs the existing
+`value_milestone_grants` twice over the same event list -- once
+unfiltered (steady-state total, a renewal year IS a renewal) and once
+with `condition == "on_renewal"` events dropped (Year-1 total, nothing
+has renewed yet) -- and `assemble_nacv` gets one new optional parameter,
+`milestone_value_year1: Decimal | None = None`, defaulting to
+`milestone_value` when omitted. All 10 pre-existing goldens and every
+other `assemble_nacv`/`value_milestone_grants` call site are unaffected;
+only a card that actually has an on_renewal grant needs the new function
+and the new parameter at all. Considered instead changing
+`value_milestone_grants` itself to take a year-mode flag, but that would
+force every caller (all 10 existing goldens) to start passing one for no
+behavioural gain -- splitting into a second wrapper function keeps the
+original simple and single-purpose, matching how `apply_incremental_bands`
+sits alongside `apply_caps` rather than growing a mode flag on it.
+
+Confirmed this stays within C.4.2's own stated MVP simplification (3-year
+cumulative treats years 2-3 as identical steady-state re-runs, no spend-
+growth modelling) -- the fix only changes which grants VALUE into which
+year's MilestoneValue; it does not attempt to re-simulate Stage 3/4's
+activation timing per year-mode (e.g. "dining_2x active from month 1 in a
+renewal year because last year's spend already crossed the threshold").
+That would be a materially bigger feature with its own assumption
+questions (does the optimiser's steady-state model assume prior-year
+history at all?) and nothing in Part C's C.9 catalogue currently needs it
+-- flagging here rather than quietly picking a scope.
+
+### 60. `golden_syn_retro_tiers.json` and `golden_syn_renewal_year_
+divergence.json` hand computations
+
+**syn_retro** (C.9 Example 6): flat Rs35,000/mo grocery, ticket 700 (zero
+floor loss at 1%/2%/3% alike). Annual 4,20,000 crosses both tiers
+(Rs1,00,000 in month 3, Rs3,00,000 in month 9), but `tier_mode:
+highest_only` fires ONLY the higher tier's `activate_rule(rate_3,
+retroactive)` -- rate_2 never activates at all, and retroactive re-rates
+the WHOLE window (all 12 months), not just the months after crossing.
+Every month ends at 3%: 35,000*0.03*12 = Rs12,600.00. No caps, no
+milestone grants (activate_rule contributes 0, its effect is already
+inside the re-rated gross reward), no fee at all (`annual_fee` unset ->
+0) -> NACV steady-state = Year-1 = Rs12,600.00, 3yr = Rs37,800.00.
+
+**syn_renewal** (C.9 Example 12) is the golden the whole #14 fix exists
+for. Flat Rs45,000/mo dining, ticket 600 (zero floor loss at 1pt or 2pt
+per Rs100). Cumulative crosses tier 1 (Rs1,00,000) in month 3 ->
+`activate_rule(dining_2x, prospective)` fires, re-rating months 4-12 only
+(the crossing month itself keeps the original rate, per #33's prospective
+convention) -- months 1-3 at 450pts/mo (1pt/Rs100), months 4-12 at
+900pts/mo (2pt/Rs100, REPLACING base, not stacking). Annual = 1,350 +
+8,100 = 9,450 pts, valued at the declared "stmt" route (ratio 0.25, no
+friction override) -> Rs2,362.50. Cumulative ALSO crosses tier 2
+(Rs5,00,000) in month 12 -> `grant_points(10,000, condition: on_renewal)`
+fires -- both tiers fire independently since this threshold is
+`cumulative`, not `highest_only`. Valued at the same route: 10,000*0.25 =
+Rs2,500.00 in the steady-state total, Rs0.00 in Year-1's (the whole point).
+No caps, no waiver threshold (fee always charged): joining_fee=1,500,
+annual_fee=1,500 -> steady_fee=1,500*1.18=Rs1,770.00, year1_fee=
+(1,500+1,500)*1.18=Rs3,540.00.
+
+NACV steady-state = 2,362.50+2,500.00-1,770.00 = Rs3,092.50. NACV Year-1 =
+2,362.50+0.00-3,540.00 = **-Rs1,177.50** -- genuinely negative, an
+illustrative and intentional result: in year one the accelerated rate
+hasn't fully kicked in, there is no renewal bonus yet, and the joining fee
+stings on top of the annual fee. 3yr = -1,177.50+2*3,092.50 = Rs5,007.50.
+177/177 tests total (11th and 12th goldens) -- full 12/12 C.9 golden
+coverage reached.

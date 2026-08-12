@@ -1,0 +1,33 @@
+{
+  "id": "golden_syn_retro_tiers",
+  "purpose": "C.9 Example 6 (retroactive tier cashback): highest_only tier resolution suppresses the lower tier entirely, and the surviving tier's activate_rule (application: retroactive) re-rates the WHOLE annual window, not just the months after crossing -- every month ends up at rate_3 (3%), none stay at base (1%) or land on rate_2 (2%).",
+  "card": "syn_retro",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "note": "Grocery ticket 700: 700*0.03=21.00 lands on an exact multiple of Rs0.01 (also true at 1%/2%), so there is zero paisa floor loss at any of the three rates -- no rounding_estimated flag expected."
+  },
+  "spend_annual": {
+    "grocery": 420000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Stage 3 (match), pre-activation: rate_2 and rate_3 both require_activation, so every month's Rs35,000 grocery binds only to base (1%).",
+    "Stage 4 (accrue), pre-activation: 35,000*0.01=Rs350.00/month * 12 = Rs4,200.00 (matches test_rule_activations.py's own unit-test assertion for this exact scenario).",
+    "Stage 6-7 (thresholds): basis=milestone_eligible_spend, ANNIV, tier_mode=highest_only. Cumulative grocery crosses tier 1 (Rs1,00,000) in month 3 (1,05,000) and tier 2 (Rs3,00,000) in month 9 (3,15,000) -- highest_only fires ONLY tier 2's payload (activate_rule rate_3, retroactive), suppressing tier 1's (rate_2) entirely -- rate_2 never activates at all.",
+    "apply_rule_activations: retroactive re-rates the WHOLE window_months (all 12), not just months after crossing -- every month's base binding is replaced by rate_3. 35,000*0.03=Rs1,050.00/month * 12 = Rs12,600.00 (cashback_inr, single route, ratio 1.0).",
+    "No caps on this card -> no-op. No milestone/benefit payloads (activate_rule contributes 0 to MilestoneValue, its effect is already inside the re-rated gross reward above). No waiver threshold -> fee is never waived, but annual_fee itself is Rs0 anyway.",
+    "Fees: joining_fee=0 (unset), annual_fee=0 -> steady_fee = 0*1.18 = Rs0.00. year1_fee = (0+0)*1.18 = Rs0.00.",
+    "NACV steady-state = 12,600.00 (GR) - 0 (fee) = Rs12,600.00.",
+    "NACV Year-1 = 12,600.00 - 0 (fee) = Rs12,600.00 (identical -- activate_rule's re-rating doesn't depend on year-mode, only condition:on_renewal grants do, and this card has none).",
+    "3-year cumulative = 12,600.00 + 2*12,600.00 = Rs37,800.00."
+  ],
+  "expected": {
+    "gross_reward_value": 12600.00,
+    "fee_paid": 0.00,
+    "nacv_steady_state": 12600.00,
+    "nacv_year_1": 12600.00,
+    "nacv_3yr": 37800.00,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}

@@ -34,6 +34,17 @@ optional zero-default parameter, per A.12's formula, but no card in the
 seed catalog has a welcome payload type to test against) and RedemptionFees
 (flat per-currency fees, already deferred at Stage 8 -- nothing new here).
 
+C.3's `condition: "on_renewal"` (syn_renewal's grant_points tier) is this
+stage's filter to apply, per docs/DECISIONS.md #14: an on_renewal grant
+belongs in the steady-state MilestoneValue but NOT in Year-1's -- there's
+no renewal to speak of in the first year. `value_milestone_grants_by_
+year_mode` does exactly that split (two `value_milestone_grants` calls,
+one over every event, one with on_renewal events dropped) so
+`assemble_nacv`'s `milestone_value_year1` parameter can diverge from
+`milestone_value` when a card needs it; it defaults to `None`, which falls
+back to `milestone_value` unchanged for every card that doesn't (identical
+to every existing golden/test call site).
+
 The trace is a flat list of named rupee lines (kind/amount/label/flags),
 not C.10's full per-node schema (cap_state, spend_basis, per-currency
 v/phi breakdown, source_refs) -- see docs/DECISIONS.md for why that's
@@ -100,6 +111,25 @@ def value_milestone_grants(
     return total, tuple(lines)
 
 
+def value_milestone_grants_by_year_mode(
+    events: Sequence[ThresholdEvent],
+    currencies: dict[str, RewardCurrency],
+    primary_routes: dict[str, str],
+    voucher_valuations: dict[str, BenefitValuation],
+) -> tuple[Decimal, tuple[TraceLine, ...], Decimal, tuple[TraceLine, ...]]:
+    """Splits milestone grants by C.3's `condition: "on_renewal"`: the
+    steady-state total includes every firing grant (a renewal year IS a
+    renewal), the Year-1 total drops any event whose payload carries
+    `condition == "on_renewal"` (nothing has renewed yet). Every other
+    condition value (currently none defined) is left alone -- unfiltered,
+    same as `value_milestone_grants` on its own. Returns (steady_total,
+    steady_lines, year1_total, year1_lines)."""
+    steady_total, steady_lines = value_milestone_grants(events, currencies, primary_routes, voucher_valuations)
+    year1_events = tuple(e for e in events if e.payload.condition != "on_renewal")
+    year1_total, year1_lines = value_milestone_grants(year1_events, currencies, primary_routes, voucher_valuations)
+    return steady_total, steady_lines, year1_total, year1_lines
+
+
 def assemble_nacv(
     gross_reward: Decimal,
     milestone_value: Decimal,
@@ -110,9 +140,12 @@ def assemble_nacv(
     surcharge_cost: Decimal = Decimal("0"),
     welcome_value: Decimal = Decimal("0"),
     milestone_lines: Sequence[TraceLine] = (),
+    milestone_value_year1: Decimal | None = None,
 ) -> NACVResult:
+    if milestone_value_year1 is None:
+        milestone_value_year1 = milestone_value
     steady_state = gross_reward + milestone_value + benefit_value - steady_fee - forex_cost - surcharge_cost
-    year_1 = gross_reward + milestone_value + benefit_value + welcome_value - year1_fee - forex_cost - surcharge_cost
+    year_1 = gross_reward + milestone_value_year1 + benefit_value + welcome_value - year1_fee - forex_cost - surcharge_cost
     three_year = year_1 + Decimal("2") * steady_state
 
     trace = (

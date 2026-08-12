@@ -1,0 +1,38 @@
+{
+  "id": "golden_syn_renewal_year_divergence",
+  "purpose": "C.9 Example 12 (renewal-benefit + rate-boost combo): a prospective activate_rule tier (dining_2x, unlocked partway through the year, re-rating only the months strictly after crossing) stacked with a condition:on_renewal grant_points tier on the SAME cumulative threshold basis. The whole point is Year-1 vs steady-state divergence -- the on_renewal grant is real money in a renewal year but must NOT show up in Year-1, since nothing has renewed yet (resolves DECISIONS.md #14).",
+  "card": "syn_renewal",
+  "year_mode": "steady_state",
+  "assumptions": {
+    "primary_route": { "synth_points": "stmt" },
+    "note": "Dining ticket 600 is an exact multiple of the Rs100 per-unit divisor at both the 1pt and 2pt rates (floor(600/100)=6 exactly), so there is zero floor loss before or after activation -- no rounding_estimated flag expected."
+  },
+  "spend_annual": {
+    "dining": 540000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Stage 3 (match), pre-activation: dining_2x requires_activation, so every month's Rs45,000 dining binds only to base (1pt/Rs100).",
+    "Stage 4 (accrue), pre-activation: ea_base = floor(600/100)*1/600 = 6/600 = 1/100 exact -> 45,000/100 = 450pts/month, all 12 months.",
+    "Stage 6-7 (threshold 'anniv', cumulative, basis=milestone_eligible_spend=dining spend since no exclusions): cumulative crosses tier 1 (Rs1,00,000) in month 3 (1,35,000) -> activate_rule(dining_2x, prospective) fires. Cumulative crosses tier 2 (Rs5,00,000) in month 12 (5,40,000) -> grant_points(10,000 synth_points, condition=on_renewal) fires. Both tiers fire independently (tier_mode=cumulative, not highest_only).",
+    "apply_rule_activations (prospective): only months STRICTLY AFTER the crossing month (3) re-rate -- months 4-12 (9 months). Months 1-3 keep base: 450*3 = 1,350pts. Months 4-12 re-rate to dining_2x: ea_bonus = 6*2/600 = 1/50 exact -> 45,000/50 = 900pts/month * 9 = 8,100pts.",
+    "Annual gross = 1,350 + 8,100 = 9,450 pts (synth_points). Valued at the declared primary route 'stmt' (ratio 0.25, no friction override -> default 1.0) -> 9,450 * 0.25 = Rs2,362.50.",
+    "Stage 11 (year-mode split, resolving DECISIONS #14): the activate_rule event contributes 0 to MilestoneValue either way (not a milestone payload type -- its effect is already inside the re-rated gross reward above). The grant_points event (condition=on_renewal) values at 10,000*0.25 = Rs2,500.00 in the STEADY-STATE total, but is DROPPED from the YEAR-1 total entirely -> milestone_value=2,500.00, milestone_value_year1=0.00.",
+    "No caps, no benefits, no waiver threshold on this card (fee is always charged in full).",
+    "Fees: joining_fee=1,500, annual_fee=1,500, never waived -> steady_fee = 1,500*1.18 = Rs1,770.00. year1_fee = (1,500+1,500)*1.18 = 3,000*1.18 = Rs3,540.00.",
+    "NACV steady-state = 2,362.50 (GR) + 2,500.00 (milestone) - 1,770.00 (fee) = Rs3,092.50.",
+    "NACV Year-1 = 2,362.50 (GR) + 0.00 (milestone, on_renewal dropped) - 3,540.00 (fee) = -Rs1,177.50 -- genuinely negative: the accelerated rate hasn't fully kicked in yet, the joining fee stings, and there is no renewal bonus in year one.",
+    "3-year cumulative = -1,177.50 + 2*3,092.50 = -1,177.50 + 6,185.00 = Rs5,007.50."
+  ],
+  "expected": {
+    "gross_reward_value": 2362.50,
+    "milestone_value": 2500.00,
+    "milestone_value_year1": 0.00,
+    "fee_paid": 1770.00,
+    "nacv_steady_state": 3092.50,
+    "nacv_year_1": -1177.50,
+    "nacv_3yr": 5007.50,
+    "flags": []
+  },
+  "tolerance_rupees": 0.01
+}

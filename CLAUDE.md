@@ -44,17 +44,16 @@ decision in `docs/DECISIONS.md` (create on first use).
 
 - [x] Phase 1 — scaffold, migration, synthetic seed
 - [x] Phase 2 — engine Stages 1–11 (`compute/engine/`) + `breakpoints.py`
-      (C.0's compile step) all implemented, 171/171 tests green. Golden
-      coverage: 10 of 12 synthetic cards wired (syn_ecom, syn_flat,
-      syn_fuel, syn_lounge, syn_miles, syn_points, syn_slab, syn_travel,
-      syn_upi, syn_waiver) — syn_renewal, syn_retro still need one, but
-      nothing blocks adding them incrementally. Open deferrals (none
-      blocking): docs/DECISIONS.md, esp. #2 (UPI ticket-size question,
-      never confirmed), #11/#32 (multi-category pooled cap/band windows),
-      #14 (on_renewal year-mode filtering), #19/#29 (RedemptionFees/
-      WelcomeValue, no fixture), #27 (trace is a flat list, not C.10's
-      full node schema), plus mcc/networks/txn/date selector fields still
-      unsupported (only categories/channels/merchant_group/geography are).
+      (C.0's compile step) all implemented, 177/177 tests green. Golden
+      coverage: 12 of 12 synthetic cards wired — full C.9 coverage
+      (syn_ecom, syn_flat, syn_fuel, syn_lounge, syn_miles, syn_points,
+      syn_renewal, syn_retro, syn_slab, syn_travel, syn_upi, syn_waiver).
+      Open deferrals (none blocking): docs/DECISIONS.md, esp. #2 (UPI
+      ticket-size question, never confirmed), #11/#32 (multi-category
+      pooled cap/band windows), #19/#29 (RedemptionFees/WelcomeValue, no
+      fixture), #27 (trace is a flat list, not C.10's full node schema),
+      plus mcc/networks/txn/date selector fields still unsupported (only
+      categories/channels/merchant_group/geography are).
 - [ ] Phase 3 — `/evaluate`, `/next-best-spend`. Breakpoint *compiler* is
       already done (`breakpoints.py`, previous line); the repair *pass*
       that walks its output is Phase 4 (`optimiser/repair.py` per E.0).

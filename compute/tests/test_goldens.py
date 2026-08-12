@@ -34,14 +34,14 @@ from decimal import Decimal
 from pathlib import Path
 
 from engine.accrue import Accrual, accrue_category_mode
-from engine.assemble import assemble_nacv, value_milestone_grants
+from engine.assemble import assemble_nacv, value_milestone_grants, value_milestone_grants_by_year_mode
 from engine.benefits import Benefit, value_countable_benefit, value_voucher_benefit
 from engine.caps import Cap, Window, apply_caps, apply_incremental_bands
 from engine.costs import Surcharge, compute_fees, forex_cost, international_spend_total, surcharge_cost
 from engine.eligibility import Exclusion, ExclusionSelector, apply_eligibility
 from engine.match import EarningRule, Selector, match
 from engine.normalise import AssumptionsSnapshot, CategorySpend, NormalisedSpend, SpendInput, normalise
-from engine.thresholds import Payload, Threshold, ThresholdBasis, Tier, evaluate_thresholds
+from engine.thresholds import Payload, Threshold, ThresholdBasis, Tier, apply_rule_activations, evaluate_thresholds
 from engine.valuation import RedemptionRoute, RewardCurrency, value_accrual_results
 from seeds.synthetic_cards import CARDS, CURRENCIES
 
@@ -755,6 +755,126 @@ def test_golden_syn_travel_forex():
     nacv = assemble_nacv(
         gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
         steady_fee=fees.steady_fee, year1_fee=fees.year1_fee, forex_cost=cost_of_forex,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    assert nacv.three_year == Decimal(str(golden["expected"]["nacv_3yr"]))
+
+
+def test_golden_syn_retro_tiers():
+    golden = json.loads((GOLDENS_DIR / "golden_syn_retro_tiers.json").read_text())
+    assert golden["card"] == "syn_retro"
+
+    spend_input = _parse_spend_annual(golden["spend_annual"])
+    normalised = normalise(spend_input, AssumptionsSnapshot())
+    eligible = apply_eligibility(normalised, exclusions=())  # syn_retro has no exclusions
+
+    earning_rules, accruals, caps = _load_card_rules("syn_retro")
+    assert caps == ()  # this card has none at all
+    bindings = match(NormalisedSpend(segments=eligible.reward), earning_rules)
+    # rate_2/rate_3 both require_activation -> pre-activation, everything binds to base only.
+    assert {b.rule_key for b in bindings} == {"base"}
+
+    uncapped = accrue_category_mode(bindings, accruals)
+    pre_activation = apply_caps(uncapped, caps, earning_rules, accruals)  # no caps -> no-op
+    assert sum((r.reward for r in pre_activation), Decimal("0")) == Decimal("4200.00")  # 35,000*0.01*12
+
+    thresholds = _load_thresholds("syn_retro")
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+    # highest_only: tier 2 (rate_3) suppresses tier 1 (rate_2) entirely, even
+    # though both tiers are crossed by this scenario's annual spend.
+    assert len(threshold_events) == 1
+    assert threshold_events[0].payload.rule == "rate_3"
+
+    final = apply_rule_activations(pre_activation, threshold_events, eligible.reward, earning_rules, accruals)
+    # retroactive: EVERY month re-rates to rate_3, none stay on base or land on rate_2.
+    assert {r.rule_key for r in final} == {"rate_3"}
+    assert len(final) == 12
+    assert not any(r.flags for r in final)  # zero floor loss at any of the three rates
+
+    gross_reward_value = sum((r.reward for r in final), Decimal("0"))
+    assert gross_reward_value == Decimal(str(golden["expected"]["gross_reward_value"]))
+
+    card = next(c for c in CARDS if c["key"] == "syn_retro")
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_value, milestone_value=Decimal("0"), benefit_value=Decimal("0"),
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
+    )
+    assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
+    assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
+    assert nacv.three_year == Decimal(str(golden["expected"]["nacv_3yr"]))
+
+
+def test_golden_syn_renewal_year_divergence():
+    golden = json.loads((GOLDENS_DIR / "golden_syn_renewal_year_divergence.json").read_text())
+    assert golden["card"] == "syn_renewal"
+
+    spend_input = _parse_spend_annual(golden["spend_annual"])
+    normalised = normalise(spend_input, AssumptionsSnapshot())
+    eligible = apply_eligibility(normalised, exclusions=())  # syn_renewal has no exclusions
+
+    earning_rules, accruals, caps = _load_card_rules("syn_renewal")
+    assert caps == ()  # this card has none at all
+    bindings = match(NormalisedSpend(segments=eligible.reward), earning_rules)
+    # dining_2x requires_activation -> pre-activation, everything binds to base only.
+    assert {b.rule_key for b in bindings} == {"base"}
+
+    uncapped = accrue_category_mode(bindings, accruals)
+    pre_activation = apply_caps(uncapped, caps, earning_rules, accruals)  # no caps -> no-op
+
+    thresholds = _load_thresholds("syn_renewal")
+    threshold_events = evaluate_thresholds(thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
+    # cumulative (not highest_only): BOTH tiers fire independently.
+    assert {e.payload.type for e in threshold_events} == {"activate_rule", "grant_points"}
+    activate_event = next(e for e in threshold_events if e.payload.type == "activate_rule")
+    assert activate_event.crossing_month == 3
+    grant_event = next(e for e in threshold_events if e.payload.type == "grant_points")
+    assert grant_event.payload.condition == "on_renewal"
+
+    final = apply_rule_activations(pre_activation, threshold_events, eligible.reward, earning_rules, accruals)
+    # prospective: months 1-3 (crossing month included) stay on base; months
+    # 4-12 (strictly after) re-rate to dining_2x, which REPLACES base
+    # (dining_2x doesn't stack).
+    by_month_rule = {(r.segment.month, r.rule_key): r.reward for r in final}
+    for month in (1, 2, 3):
+        assert by_month_rule[(month, "base")] == Decimal("450")
+    for month in range(4, 13):
+        assert by_month_rule[(month, "dining_2x")] == Decimal("900")
+    assert not any(r.flags for r in final)  # zero floor loss at either rate
+
+    gross_reward_points = sum((r.reward for r in final), Decimal("0"))
+    assert gross_reward_points == Decimal("9450")  # 450*3 + 900*9
+
+    currencies = _load_currencies()
+    primary_routes = golden["assumptions"]["primary_route"]
+    reward_valuations = value_accrual_results(final, accruals, currencies, primary_routes)
+    gross_reward_rupees = sum((v.v_exp_rupees for v in reward_valuations), Decimal("0"))
+    assert gross_reward_rupees == Decimal(str(golden["expected"]["gross_reward_value"]))
+
+    # Stage 11 year-mode split (resolving DECISIONS.md #14): the on_renewal
+    # grant_points event prices into the steady-state total but is dropped
+    # from Year-1's -- activate_rule contributes 0 to either (not a milestone
+    # payload type; its effect already lives inside gross_reward_rupees).
+    steady_milestone, _steady_lines, year1_milestone, _year1_lines = value_milestone_grants_by_year_mode(
+        threshold_events, currencies, primary_routes, voucher_valuations={},
+    )
+    assert steady_milestone == Decimal(str(golden["expected"]["milestone_value"]))
+    assert year1_milestone == Decimal(str(golden["expected"]["milestone_value_year1"]))
+
+    card = next(c for c in CARDS if c["key"] == "syn_renewal")
+    joining_fee = Decimal(str(card["version"].get("joining_fee", 0)))
+    annual_fee = Decimal(str(card["version"].get("annual_fee", 0)))
+    fees = compute_fees(joining_fee, annual_fee, threshold_events)  # no waiver threshold -> always charged
+    assert fees.steady_fee == Decimal(str(golden["expected"]["fee_paid"]))
+
+    nacv = assemble_nacv(
+        gross_reward=gross_reward_rupees, milestone_value=steady_milestone, benefit_value=Decimal("0"),
+        steady_fee=fees.steady_fee, year1_fee=fees.year1_fee, milestone_value_year1=year1_milestone,
     )
     assert nacv.steady_state == Decimal(str(golden["expected"]["nacv_steady_state"]))
     assert nacv.year_1 == Decimal(str(golden["expected"]["nacv_year_1"]))
