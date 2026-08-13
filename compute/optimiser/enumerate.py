@@ -31,7 +31,7 @@ from itertools import combinations
 from typing import Sequence
 
 from engine.card_bundle import CardRuleBundle
-from engine.evaluate import EvaluateAssumptions
+from engine.evaluate import EvaluateAssumptions, EvaluateResult
 from engine.normalise import SpendInput
 from engine.valuation import RewardCurrency
 from optimiser.allocate import AllocationResult, allocate
@@ -50,6 +50,7 @@ class SubsetResult:
     repair_applied: bool
     gap: Decimal
     allocation: AllocationResult  # the winning (possibly repaired) allocation
+    card_results: dict[str, EvaluateResult]  # per-card exact evaluation, reused by frontier.py's T2 fee-cover test
 
 
 def enumerate_subsets(
@@ -86,7 +87,7 @@ def enumerate_subsets(
                 subset_key=subset_key, card_keys=card_keys, size=size,
                 pv_planned=allocation.pv_planned, pv_exact=repaired.valuation.pv_exact,
                 repair_applied=repaired.repair_applied, gap=repaired.gap,
-                allocation=repaired.allocation,
+                allocation=repaired.allocation, card_results=repaired.valuation.card_results,
             ))
 
     return tuple(results)
