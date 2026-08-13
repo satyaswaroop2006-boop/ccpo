@@ -130,7 +130,7 @@ def _card_segments(allocation: AllocationResult, card_key: str) -> tuple[SpendSe
     )
 
 
-def _pooled_spend_per_instance(
+def pooled_spend_per_instance(
     allocation: AllocationResult, card_key: str, exclusions, bp: Breakpoint,
 ) -> list[tuple[tuple[int, ...], Decimal]]:
     eligible = apply_eligibility(NormalisedSpend(segments=_card_segments(allocation, card_key)), exclusions)
@@ -214,7 +214,7 @@ def repair(
     for bundle in bundles:
         breakpoints = compile_card_breakpoints(CardBreakpointInputs(card_key=bundle.card_key, thresholds=bundle.thresholds))
         for bp in breakpoints:
-            for instance_months, pooled in _pooled_spend_per_instance(allocation, bundle.card_key, bundle.exclusions, bp):
+            for instance_months, pooled in pooled_spend_per_instance(allocation, bundle.card_key, bundle.exclusions, bp):
                 gap_to_cross = bp.threshold_spend - pooled
                 if not (Decimal("0") < gap_to_cross <= bp.buffer):
                     continue
