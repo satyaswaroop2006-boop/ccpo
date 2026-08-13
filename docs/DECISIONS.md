@@ -5,7 +5,7 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
-## Status as of 2026-08-12 (Phase 4 slice 4 -- optimiser/candidates.py)
+## Status as of 2026-08-13 (Phase 4 complete -- POST /optimise)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
 177/177 tests green, 12/12 synthetic cards have a passing golden -- full
@@ -16,9 +16,20 @@ in progress: `optimiser/allocate.py` (slice 1, the inner MILP for a fixed
 card subset) + `optimiser/repair.py` (slice 2, exact evaluation +
 near-miss threshold repair) + `optimiser/enumerate.py` (slice 3, subset
 generation over both) + `optimiser/candidates.py` (slice 4, pre-filtering
-the card universe down to enumeration's input) -- 231/231 tests green. No
-blocking deferrals -- 12 non-blocking items remain open (table below);
-none of them gate this work.
+the card universe down to enumeration's input) + `optimiser/frontier.py`
+(slice 5a, SS E.9 efficient frontier + the transparent size-recommendation
+checklist) + `optimiser/classify.py` (slice 5b, SS E.8 ICV/Overlap +
+KEEP/OPTIONAL/CLOSE/HOLD/ADD/DOWNGRADE) + `optimiser/scenarios.py`
+(slice 6, SS E.11 Low/Expected/High spend sweeps, Robustness, rank
+stability, feeds frontier.py's T3) + `optimiser/explain.py` (slice 7, SS
+E.12 explainability: why-this-card ledger, threshold funding analysis,
+crossover scans, marginal value curves) + `POST /optimise` (slice 8, the
+wiring layer over every module above: candidates -> enumerate -> scenarios
+-> frontier -> classify) -- 271/271 tests green. No blocking deferrals --
+17 non-blocking items remain open (table below); none of them gate this
+work. **Phase 4 is complete** -- every module in Part E SS E.0's layout
+now exists and is wired to an endpoint. Next up: Phase 5 (real card
+ingestion, Part I) or Phase 6 (frontend, Part F) -- Satya's call.
 
 **Genuinely open items** (none blocking today's work; listed so a future
 session doesn't have to scan all entries below to find them):
@@ -37,6 +48,11 @@ session doesn't have to scan all entries below to find them):
 | #71 | `optimiser/repair.py`: no "barely-made" variants, no cap breakpoints, top-up sourced from `c0` only | Each is a real design surface deferred, not an oversight -- barely-made needs a cost model for what a card's excess spend gives up elsewhere; cap breakpoints are already optimal by construction in `allocate.py`'s LP; pulling top-up from a real card (not just `c0`) needs the same cost model barely-made does -- see #72 |
 | #73 | `optimiser/enumerate.py`: no wallet-mode inclusion, no infeasibility filtering, no bound pruning, no caching, no parallelism | Full-sweep only this slice -- wallet mode and user-constraint machinery (must-keep/refuse/fee-budget) don't exist anywhere yet; bound pruning needs SS E.2's MABC ceiling (not built) and is explicitly a scale optimisation the spec says is irrelevant below the current <=12-card catalog; caching needs DB persistence nothing writes yet -- see #74 |
 | #75 | `optimiser/candidates.py`: no MABC, no hard include/exclude, no `constraints_snapshot` persistence | MABC is SS E.2's own addition beyond SS B.7's core spec (SS B.7 doesn't mention it), needing a "force eligible spend to a tier" construct that doesn't exist; hard include/exclude needs wallet mode and user constraints (same blocker as #73); persistence needs DB writes nothing does yet -- see #76 |
+| #78 | `optimiser/frontier.py`: T3 (scenario floor) only runs when the caller supplies low-spend pv_exact data | `optimiser/scenarios.py` (SS E.11, the Low/Expected/High sweep) is later in the build order than this slice; `t3_pass` is `None` ("not evaluated"), never defaulted to pass or fail, until scenarios.py exists and a caller wires it through |
+| #79 | `optimiser/classify.py`: DOWNGRADE untested against a real fixture; no eligibility filter on ADD | `cards.family_key` (Part D SS D.3) doesn't exist anywhere in the schema yet -- grep-confirmed; DOWNGRADE is spec-complete and unit-tested against fabricated data only. ADD has no SS33 eligibility check (not modelled in the optimiser at all yet) -- ranked on ICV alone |
+| #86 | `optimiser/scenarios.py`: uniform scalar scaling only, no literal sweep caching | SS E.11 itself defers per-category scenario editing to later; sweep-level caching is still blocked on the same DB-persistence gap as #73/#74 -- each of the 3 sweeps is a fresh full solve, just over a shared candidate set |
+| #93, #94 | `optimiser/explain.py`: no cap-binding-state in `threshold_funding_report`; crossover scans always re-solve (no literal "evaluator only" shortcut for multi-card portfolios) | Cap `cap_state` (bound/unbound) isn't returned anywhere in the engine (same gap as #27); re-solving via `allocate`+`repair` is the only way to get a genuinely correct value as spend shifts across a multi-card portfolio, so SS E.12's "no MILP" is read as applying only to the single-card case it illustrates |
+| #97 | `POST /optimise`: no persistence, no wallet mode, no explain.py wiring, 3/12 synthetic cards excluded by default | `optimisation_runs`/`portfolio_subset_results`/`evaluation_runs` writes don't exist yet (same gap as Phase 3's `/evaluate`); wallet mode itself doesn't exist (#10/#61); explain.py's crossover/curve/ledger surfaces need per-query driver/grid inputs a single "optimise" response can't supply generically -- left as separate future on-demand endpoints; `syn_points`/`syn_slab` are genuine `allocate.py` scope gaps (#68/#70), `syn_lounge` just needs `benefit_need`/`benefit_unit_value` assumptions supplied |
 | — | `mcc_include`/`mcc_exclude`/`networks`/`txn_min`/`txn_max`/`date_from`/`date_to` selector fields | Still rejected everywhere selectors are matched (match.py, eligibility.py) — only categories/channels/merchant_group/geography are supported |
 
 **Confirmed and settled (not open)**: `upi_category_mix` weights (#1),
@@ -1779,3 +1795,525 @@ trims exactly `syn_miles` (the only standalone-only, lowest-ranked entry)
 while protecting both champions.
 
 231/231 tests green (227 prior + 4 new).
+
+---
+
+## 2026-08-12 -- optimiser/frontier.py + optimiser/classify.py (Part E SS E.8-E.9)
+
+### 78. `optimiser/enumerate.py`'s `SubsetResult` gained a `card_results` field
+
+`repair.RepairResult.valuation.card_results` (per-card `EvaluateResult`,
+already computed by every `repair()` call) was being computed then thrown
+away by `enumerate_subsets` -- only `pv_exact`/`gap` were kept. Frontier's
+T2 (fee-cover ratio) needs each card's `gross_reward_value`/
+`milestone_value`/`benefit_value` to compute `DeltaGrossBenefit`, so
+`SubsetResult` now carries `card_results: dict[str, EvaluateResult]`
+too -- zero new computation, just stops discarding data already produced.
+Purely additive (new field, no signature change to any existing call
+site); `tests/test_enumerate.py`'s 5 existing tests pass unchanged.
+
+### 79. T2's `DeltaF` is a portfolio-total fee delta, not literally "the new
+card's fee" -- because the frontier gives no nesting guarantee
+
+SS E.9's own worked example ("3rd card: ... fees +Rs1,500 ...") reads as
+if step n->n+1 always adds exactly one card on top of the same n-card
+base. But the frontier's winning subset at size n+1 is `SELECT size,
+max(pv_exact) ... GROUP BY size` -- an entirely different (n+1)-combination
+can simply score higher than "the size-n winner plus one card," with no
+guarantee the size-n winner is even a subset of it. Full-sweep enumeration
+(SS E.3) doesn't produce a nested chain by construction. Resolved as
+`DeltaF = TotalGrossFee(winner(n+1)) - TotalGrossFee(winner(n))` -- well-
+defined regardless of nesting, and identical to the single-card reading
+whenever the frontier IS nested (the common case in practice), so nothing
+is lost when it is nested and nothing breaks when it isn't.
+
+### 80. "Gross, pre-waiver" fee = `annual_fee . (1+GST)`, not the bare
+sticker price
+
+SS E.9's T2 says "ΔF = additional annual fees committed (gross,
+pre-waiver)" -- explicit about ignoring the waiver, silent on GST.
+Read as "the amount you're actually on the hook for absent a waiver,"
+matching `engine.costs.compute_fees`'s own `steady_fee` formula with the
+waiver term forced off (`annual_fee * (1+GST_RATE)`), not the pre-tax
+number -- GST is a real, unavoidable cost of NOT getting the waiver, so
+excluding it would understate what "fees committed" actually means to the
+user.
+
+### 81. `DeltaGrossBenefit` = NACV with fees/forex/surcharge added back, not
+NACV itself
+
+`engine.assemble.assemble_nacv`'s formula is `NACV = GrossReward +
+MilestoneValue + BenefitValue - SteadyFee - ForexCost - SurchargeCost`.
+T2's "ΔGrossBenefit / ΔF >= 1.5" reads as a margin-thickness check --
+does the reward SIDE alone cover the fee several times over -- not a
+net-of-everything number (that's what T1/ΔV already checks). Implemented
+as `Sum_c (gross_reward_value(c) + milestone_value(c) + benefit_value(c))`
+across the subset's `card_results`, deliberately excluding forex/surcharge
+too (those are costs, not part of "gross benefit" under any reading).
+
+### 82. New assumption-registry defaults -- NEW, needs Satya's sign-off
+
+SS E.9 itself: "all three [T1/T2] parameters live in the assumptions
+registry (C.7), never hidden." No C.7 section actually lists numeric
+values for these (C.7 as read so far covers ticket sizes and the UPI mix,
+not optimiser-level tolerances), so the spec's own suggested defaults were
+implemented as-is, exposed as keyword arguments on `build_frontier`
+(same "module-level DEFAULT_* constant, override via kwarg" pattern as
+`candidates.py`'s `DEFAULT_STANDALONE_N` etc.):
+
+| Constant | Value | Source |
+|---|---|---|
+| `abs_floor` | Rs2,000/yr | SS E.9 T1, stated directly |
+| `rel_pct` | 3% | SS E.9 T1, stated directly |
+| `fee_cover_ratio` | 1.5x | SS E.9 T2, stated directly |
+| `fee_de_minimis` | Rs1,000 | SS E.9 T2, stated directly |
+| `icv_meaningful` (classify.py) | Rs1,000/yr | SS E.8, stated directly ("registry, default Rs1,000") |
+
+Unlike #1's `upi_category_mix` (an outright guess), these five are all
+literal numbers already in the spec text -- flagged here per CLAUDE.md's
+"surface every assumption-registry default" rule anyway, since they're
+still registry values a future UI must let the user edit, not constants
+this module should own.
+
+### 83. `n_tol=None` means "no user-specified tolerance," not "tolerance 0"
+
+SS E.9 frames `N_tol` as "the user's complexity tier" -- a UI concept that
+doesn't exist as an input anywhere yet (no wallet/constraint model, same
+family of gaps as #73/#75/#76). `build_frontier(..., n_tol=None)` (the
+default) never triggers `capped_by_tolerance` -- the walk is bounded only
+by T1/T2/T3 and by how far the sweep enumerated. A future caller wires the
+user's actual tier through this same parameter; nothing changes on this
+module's side when that lands.
+
+### 84. `classify.py`'s `_pv_of` reuses SS E.8's own escape hatch ("if
+enumerated; else one extra solve") rather than requiring a full sweep
+
+Every ICV/Overlap lookup classify.py needs (`P`, `P\{c}`, `{c}` standalone,
+`P u {c+}`, family-swap subsets) is first looked up in the caller's
+already-enumerated `results`; on a miss, it calls `allocate()` + `repair()`
+directly on exactly that subset -- the same two primitives
+`optimiser/enumerate.py` and `optimiser/candidates.py` already build on.
+This means classify.py works correctly even against a narrow
+`cardinality_mode="exactly"` sweep that never enumerated the size-(n-1)/
+size-1 subsets classification needs (verified directly:
+`test_pv_falls_back_to_a_fresh_solve_when_not_in_results` supplies only
+the two single-card results and confirms the 2-card portfolio value is
+still solved correctly, landing on the exact same Rs17,850.00 the
+lookup-path test gets independently).
+
+### 85. DOWNGRADE and HOLD are spec-complete but untested against a real
+fixture -- confirmed no schema gap was silently papered over
+
+Grepped the whole repo for `family_key` before writing classify.py: zero
+hits outside Part E's own prose. `cards.family_key` (Part D SS D.3's "small
+additive schema element") was never added to `seeds/synthetic_cards.py`,
+`supabase/migrations/`, or `engine/card_bundle.py`. Rather than inventing
+a family relationship among the 12 synthetic cards that doesn't reflect
+anything real, DOWNGRADE is implemented exactly to SS E.8's formula
+(`pv_exact(P\{c} u {c'}) > pv_exact(P)`) gated on an optional
+caller-supplied `family_keys: dict[card_key, family_id]`, defaulting to
+`{}` (DOWNGRADE never fires). Tested with a directly-fabricated
+`SubsetResult` pair proving the comparison logic itself is correct, same
+posture as `WelcomeValue` (#29) and `flat_perk` (#23) -- "spec-complete,
+no real fixture yet" is recorded, not silently absent. HOLD's
+`strategic_feature_cards` flag is the same story: no user-constraint model
+exists to derive "the user cares about this card's zero-forex feature"
+from, so it's a plain caller-supplied set, tested the same fabricated way.
+
+### Verification
+
+`tests/test_frontier.py` (10 tests): frontier points and the T1/trivial-T2
+path verified end-to-end through the real engine (syn_ecom + syn_flat,
+Rs12,00,000/yr ecommerce -- syn_ecom alone Rs21,600.00, syn_flat alone
+Rs18,000.00, both Rs26,400.00, DeltaV=Rs4,800.00 clears T1's Rs2,000 floor);
+a smaller-spend variant (test_enumerate.py's own Rs6,00,000 scenario,
+DeltaV=Rs1,800.00) proves T1 can genuinely block a step; `n_tol=1` proves
+tolerance-capping without discarding the step record; a fabricated
+size-1/size-3 gap proves the walk stops rather than guessing across a
+missing size. T2's actual ratio arithmetic and T3's optional veto are
+tested against directly-constructed `SubsetResult`s (ratio 1.695x passes,
+0.678x fails above the Rs1,000 de-minimis; a negative low-spend delta
+vetoes an otherwise-passing step; an unmatched subset key leaves `t3_pass`
+`None` rather than defaulting either way). `format_step` checked
+ASCII-only and stating the right numbers.
+
+`tests/test_classify.py` (7 tests): KEEP/OPTIONAL/ICV/Overlap verified
+end-to-end (universe `{syn_ecom, syn_flat, syn_miles}`, test_candidates.py's
+own spend and standalone numbers -- P={syn_ecom,syn_flat} pv_exact
+Rs17,850.00, ICV(syn_ecom|P)=Rs8,400.00, ICV(syn_flat|P)=Rs1,950.00, both
+Overlaps Rs7,500.00); the fresh-solve fallback verified to land on the
+identical Rs17,850.00 with only single-card results supplied; ADD/
+NOT_MATERIAL verified via a fabricated 3-card lookup (isolating classify's
+own arithmetic from a full milestone-crossing hand computation already
+covered elsewhere); CLOSE/HOLD and DOWNGRADE verified via fabricated
+subsets per #85 above.
+
+248/248 tests green (231 prior + 17 new).
+
+---
+
+## 2026-08-12 -- optimiser/scenarios.py (Part E SS E.11)
+
+### 86. Whole-vector scalar scaling; `UpiAggregateSpend` scaled too, not just
+`CategorySpend`
+
+SS E.11's formula is literally "spend vector x {0.8, 1.0, 1.2}" -- the
+whole vector, not just the category-mode lines. `SpendInput` has two
+distinct spend paths (`category_spend` tuple and the optional
+`upi_aggregate: UpiAggregateSpend`, Stage 1's C.4.1 decomposition input);
+`scale_spend` multiplies both when present, so a user who declared their
+spend as an aggregate UPI figure gets correctly-scaled Low/High scenarios
+too, not silently unscaled ones.
+
+### 87. Robustness is `None`, not 0 or a negative/absurd ratio, when
+`V_expected <= 0`
+
+Not spec-stated either way. `Robustness = V_low/V_expected` is meant to
+answer "what fraction of its value does this portfolio keep if spending
+drops" -- a question that only makes sense when there's positive value to
+begin with. A portfolio the optimiser would never actually recommend
+(net-negative expected NACV) doesn't get a fabricated percentage;
+`robustness_for` returns `None` for exactly this case, distinguishable
+from an actual computed ratio the same way `frontier.py`'s `t3_pass:
+bool | None` is (`None` = "not a meaningful number here," not "zero").
+
+### 88. Rank stability computed across every enumerated subset, not
+grouped by size
+
+SS E.11: "rank stability (does the recommended portfolio stay top-3
+across scenarios)" -- no size-grouping qualifier. `_rank` sorts ALL of a
+scenario's `SubsetResult`s by `pv_exact` and finds where the target
+subset lands; `rank_stable` requires that rank `<= top_n` (default 3, SS
+E.11's own number) in Low, Expected, AND High simultaneously. This means a
+2-card portfolio is being ranked against 1-card and 3-card portfolios
+too, not just other 2-card ones -- which is exactly SS E.9's own frontier
+comparison scope (the frontier picks a best-of-all-sizes winner, so
+"stays top-3" naturally means top-3 among everything the sweep
+considered, the same population frontier.py's `build_frontier` draws its
+per-size winners from).
+
+### 89. `run_scenarios(expected_results=...)` lets a caller skip the third
+solve
+
+Every real caller of this module will already have run the expected-spend
+sweep (frontier.py needs `enumerate_subsets`'s output regardless of
+whether scenarios ever run) -- re-solving it a third time inside
+`run_scenarios` would be pure waste. `expected_results` is optional
+(defaults to `None`, which triggers a fresh solve so the module is usable
+standalone/in tests without ceremony); when supplied, it's passed through
+by identity, not copied or re-validated. `test_expected_results_reused_
+instead_of_resolved` asserts `sweep.expected is precomputed` specifically
+to prove no silent re-solve happens.
+
+### 90. New assumption-registry defaults -- NEW, needs Satya's sign-off
+
+Same posture as #82 (frontier.py's T1-T3 constants): all three numbers
+are stated directly in SS E.11's own text, not guessed, but still flagged
+per CLAUDE.md's "surface every assumption-registry default" rule since a
+future UI must let the user edit them.
+
+| Constant | Value | Source |
+|---|---|---|
+| `low_factor` | 0.8 | SS E.11, "spend vector x {0.8, 1.0, 1.2}" |
+| `high_factor` | 1.2 | SS E.11, same |
+| rank-stability `top_n` | 3 | SS E.11, "stay top-3 across scenarios" |
+
+### Verification
+
+`tests/test_scenarios.py` (7 tests). `scale_spend` checked against both
+`CategorySpend` and `UpiAggregateSpend` paths. Low/Expected/High swept
+end-to-end through the real engine on `{syn_ecom, syn_flat}` at
+Rs6,00,000/yr (Low Rs4,80,000, High Rs7,20,000): syn_ecom alone
+Rs14,400.00/Rs15,600.00/Rs16,800.00, syn_flat alone Rs7,200.00/
+Rs9,000.00/Rs10,800.00, both Rs15,600.00/Rs17,400.00/Rs19,200.00 -- the
+Expected-spend figures match test_enumerate.py's own independently-
+verified numbers exactly, confirming `run_scenarios`'s 1.0x sweep isn't
+silently diverging from a plain `enumerate_subsets` call. A second
+scenario (Rs12,00,000/yr, matching test_frontier.py's own T1-pass fixture)
+verifies `robustness_for`'s ratio arithmetic and wires `low_spend_pv_by_
+subset_key` straight into `build_frontier`, confirming T3 actually
+receives and correctly applies real Low-scenario numbers end-to-end (not
+just structurally, as test_frontier.py's own T3 tests already checked
+with fabricated data). Rank-stability's "drops out of top-3" branch
+needed more than 3 real subsets to be meaningful, so that case (and the
+`V_expected<=0 -> None` case) use directly-constructed `SubsetResult`s,
+same posture as #77/#85's fabricated-data tests.
+
+255/255 tests green (248 prior + 7 new).
+
+---
+
+## 2026-08-13 -- optimiser/explain.py (Part E SS E.12)
+
+### 91. Marginal bands / Next-Best-Spend is NOT rebuilt here -- already
+satisfied by Phase 3's `POST /next-best-spend`
+
+Re-read SS E.12's fourth bullet before writing anything: "evaluator-only
+endpoint... for each held card and each of Delta in {1k,10k,50k}, exact
+delta-value" is a verbatim description of `app/main.py`'s existing
+`/next-best-spend` (`docs/DECISIONS.md`'s own Phase 3 status block already
+records it as done, annual marginal-delta MVP). Building a second,
+optimiser-side version would be exactly the duplicate-implementation
+CLAUDE.md rule 1 exists to prevent. `explain.py`'s docstring points at it
+instead of re-deriving it.
+
+### 92. `repair.py`'s `_pooled_spend_per_instance` promoted to
+`pooled_spend_per_instance` (public) -- second consumer, same pattern as
+`caps.py`'s `window_instances`/`window_flags` (#15)
+
+`threshold_funding_report` needs EXACTLY the pooling logic `repair()`
+already runs when hunting for near-miss thresholds -- the only difference
+is reporting every breakpoint's status, not just the ones close enough to
+top up. Renamed (no behaviour change, `tests/test_repair.py`'s 4 tests
+pass unchanged) rather than duplicated, same "a later module importing an
+earlier one's shared vocabulary" direction #15 already established.
+
+### 93. Threshold funding analysis stops at thresholds; cap-binding state
+is a real, separately-logged gap, not silently skipped
+
+SS38 asks for two things: "which caps were hit (binding segment)" and
+"which thresholds were funded vs left short and by how much."
+`threshold_funding_report` only builds the second half. The first needs
+Stage 5's per-window cap_state (bound vs unbound) surfaced somewhere --
+`caps.py`'s `apply_caps` computes this internally (which segment of a
+capped rule's chain actually got filled) but doesn't return it on
+`AccrualResult` or anywhere else, the exact same fidelity gap #27 already
+named for the trace schema generally. Compiling ONLY threshold
+breakpoints here (never caps) also matches `repair.py`'s own established
+boundary (#71: cap breakpoints are already optimal by construction in
+`allocate.py`'s LP, so there was never a reason to compile them for the
+near-miss search either).
+
+### 94. Crossover scans always re-solve via `allocate()` + `repair()` --
+SS E.12's "evaluator only, no MILP" is read as describing the single-card
+case, not a literal constraint on this module
+
+SS38's crossover example ("vary one driver... re-evaluate the top-2
+portfolios (evaluator only -- no MILP)") doesn't specify how a MULTI-card
+portfolio's spend should be re-priced as one category's spend changes
+without re-running its allocation. Freezing the old allocation's card-by-
+card split and just re-pricing each card's frozen share through the
+evaluator would silently understate value the moment a card's segments
+saturate differently at the new spend level (e.g. a capped rule's
+overflow boundary shifts) -- exactly the kind of smoothed number
+`optimiser/candidates.py`'s own #77 entry already rejected for standalone
+value ("no card is ever excluded on smoothed numbers"). `scan_driver`
+therefore always calls `allocate()` + `repair()` at every grid point,
+which happens to collapse to a pure `evaluate_card`-only call whenever
+`portfolio_a`/`portfolio_b` are single-card lists (the LP has nothing to
+decide with one card and c0) -- i.e. it satisfies SS E.12's own worked
+example exactly, while staying correct for the general multi-card case
+the example doesn't cover.
+
+### 95. Marginal-value-curve kinks: a monthly-window cap's breakpoint must
+be multiplied by its window's instance count before comparing against an
+ANNUAL spend grid -- caught before it shipped a silently wrong number
+
+This was the one place this slice almost got wrong. `Breakpoint.
+threshold_spend` is spend-domain (docs/DECISIONS.md #30) but scoped to ONE
+window instance -- syn_ecom's `cap_ecom` breakpoint is `Rs20,000`, meaning
+"Rs20,000 in one calendar month," not "Rs20,000 a year." A first draft of
+`marginal_value_curve` compared this directly against the ANNUAL spend
+grid (`_spend_with_driver`'s `annual_amount`), which would have placed the
+cap's kink marker at Rs20,000 -- nowhere near the curve's actual slope
+change, which the hand-computed test fixture proves happens at
+Rs2,40,000 (Rs20,000/mo * 12, exactly where `test_marginal_value_curve_
+hand_computed_points_and_kinks`'s Rs2,16,000/Rs2,40,000/Rs2,64,000 points
+show the reward growth rate switching from 5% to 1%). Fixed by
+multiplying every breakpoint's `threshold_spend` by
+`len(engine.caps.window_instances(bp.window))` before the range check --
+12 for `calendar_month`, 1 for `anniversary_year`, matching the
+"uniform-seasonality instances share the annual total equally" model
+`_spend_with_driver` itself implies (it never touches `seasonality`, only
+`annual_amount`). Explicitly does NOT apply when the swept line carries a
+custom seasonality (`_annualised_kinks` returns `()` in that case,
+verified by `test_marginal_value_curve_skips_kinks_for_a_custom_
+seasonality_line`) -- the uniform-split assumption breaks down and a wrong
+kink marker is worse than no marker; the curve's own points are computed
+by a real `evaluate_card` call regardless and are correct either way.
+
+### 96. No new assumption-registry defaults this slice
+
+Unlike frontier.py (#82) and scenarios.py (#90), nothing in `explain.py`
+introduces a numeric default needing sign-off -- grids/spans are always
+caller-supplied (there's no spec-stated "scan from X to Y" number to
+transcribe), and the ledger/threshold-report/curve functions are pure
+reshaping of numbers the engine already produces.
+
+### Verification
+
+`tests/test_explain.py` (10 tests). `build_card_ledger` checked against a
+plain `evaluate_card` call (Rs960.00 reward / Rs0 milestones / Rs0
+benefits / -Rs590.00 costs = Rs370.00, matching test_repair.py's own
+near-miss baseline hand computation exactly). `threshold_funding_report`
+run against test_repair.py's three already-hand-verified `AllocationResult`
+fixtures directly, asserting the near-miss (Rs4,000 short, within buffer),
+genuine-shortfall (Rs28,000 short, outside buffer), and comfortably-funded
+(-Rs3,80,000 gap, i.e. Rs3,80,000 of headroom) cases without re-deriving
+any of their numbers. `scan_driver` verified three ways on syn_ecom-vs-
+syn_flat's exactly-linear rate structure in the overflow regime: a
+crossover landing precisely on a grid point (Rs19,20,000, cross-checked
+against 3 full hand-computed grid points), the same crossover recovered
+by interpolation when the grid skips it, and a range with no crossover at
+all (syn_ecom's uncapped 5% always beats syn_flat's 1.5%).
+`find_smallest_flip` verified over two drivers sharing one zero-baseline
+spend input (proving the "other" line's placeholder value doesn't leak
+into either scan) -- the flipping driver sorts first with the correct
+`change_needed`, the non-flipping one's `None` sorts last.
+`marginal_value_curve` verified against 5 hand-computed points spanning
+syn_ecom's waiver AND cap breakpoints in one sweep, with `#95`'s
+annualisation fix confirmed to place both kinks (Rs1,00,000 and
+Rs2,40,000) exactly where the point-by-point numbers show the curve
+actually bending -- plus a custom-seasonality case proving kinks are
+omitted, never mislabelled, when the annualisation assumption doesn't hold.
+
+265/265 tests green (255 prior + 10 new).
+
+---
+
+## 2026-08-13 -- POST /optimise (Part E SS E.0/E.1), Phase 4 complete
+
+### 97. `CardRepository` gained `get_all_card_bundles()` -- SS E.2's "live
+card universe" input didn't have a source yet
+
+`get_card_bundle(key)` (one card) and `get_currencies()` were the only
+two methods either repository implementation had -- nothing returned "the
+whole catalog," which SS E.2 names as candidate selection's actual input
+("live card universe (from `current_card_versions`)"). Added to the
+`CardRepository` Protocol and both implementations:
+`SyntheticCatalogRepository` maps `bundle_from_dict` over all of
+`seeds/synthetic_cards.py`'s `CARDS`; `PostgresCardRepository` adds one
+new query (`_fetch_all_card_keys`, joining `cards` to
+`current_card_versions`) and reuses the existing per-card `_fetch_card_
+dict` for each key (N+1 queries -- the simplest correct option at
+today's catalog size; a single wide query is a performance follow-up
+noted here, not a correctness concern raised now).
+
+### 98. Discovered empirically, before it could ship as a crash: candidate
+selection over the FULL live catalog needs a compatibility pre-filter, or
+one unsupported card takes down the entire optimisation
+
+Before wiring `/optimise`, ran every one of the 12 synthetic cards
+through a plain `allocate([bundle], ...)` + `repair(...)` call (exactly
+what `optimiser/candidates.py`'s own `_standalone_value` does for every
+universe card, unconditionally, with no exception handling anywhere in
+that loop). Result: **3 of 12 cards raise**, for two genuinely different
+reasons that needed distinguishing before deciding what to do about them:
+
+- **Genuine `allocate.py` scope gaps, no request can work around them**
+  (docs/DECISIONS.md #68/#70): `syn_points` (`cap_portal` is
+  `rule_group`-scoped; only `scope="rule"` reward caps are supported) and
+  `syn_slab` (incremental `tier_mode`, needs fill-order binaries `allocate.
+  py` doesn't have).
+- **Missing request configuration, not a code gap**: `syn_lounge`'s
+  countable `dom_lounge` benefit needs `benefit_need`/`benefit_unit_value`
+  assumptions (`engine.evaluate.evaluate_card` raises without them,
+  correctly, per its own existing behaviour) -- supplying those two
+  assumptions in the request makes `syn_lounge` probe-compatible, verified
+  directly. (`syn_miles`/`syn_travel`/`syn_renewal` looked like they'd
+  fail too on a first pass with NO `primary_routes` declared for
+  `synth_points`'s 4-route currency -- but that's the same "missing
+  configuration, not a gap" story, and they all probe-compatible once
+  `primary_routes={"synth_points": "stmt"}` is supplied.)
+
+Without a filter, `select_candidates` would let whichever ONE of these
+three cards happens to be in the universe crash candidate selection for
+the entire catalog -- every OTHER card's opportunity lost because of one
+incompatible one, exactly the "one bad card sours everything" failure
+mode `/optimise`'s whole purpose (finding the BEST card(s)) can't afford.
+Fixed with `app/main.py::_partition_universe`: a pre-flight
+`allocate`+`repair` probe per universe card (the request's actual
+spend/assumptions, so it catches BOTH failure classes above in one
+mechanism), splitting the universe into `compatible` (fed to
+`select_candidates` as before, untouched) and `excluded` (reported in the
+response as `{card_key, reason}` pairs, SS E.2's own "why was card X even
+considered / not considered" transparency principle applied one step
+earlier than SS E.2 itself describes -- before ranking, not after).
+`optimiser/candidates.py`, `optimiser/allocate.py`, and `optimiser/
+repair.py` themselves are UNCHANGED -- they keep raising exactly as
+before for any direct caller (including a hand-picked `candidate_
+universe` that still names an incompatible card); this filter lives
+entirely at the API orchestration layer, not inside the optimiser
+package. Costs one extra `allocate`+`repair` solve per compatible card
+(duplicate of what `_standalone_value` does next) -- immaterial at
+today's <=20-card catalog scale, not worth caching away this pass.
+
+### 99. `candidate_universe` request field: explicit override, not just
+"pull everything"
+
+`OptimiseRequest.candidate_universe: list[str] | None = None` -- `None`
+pulls the full live catalog via `get_all_card_bundles()` (the SS E.2
+default); a caller can instead pin an exact key list. Two reasons beyond
+convenience: (1) it's how this endpoint's own test suite stays fast and
+deterministic without depending on which of the live catalog's cards
+happen to be `allocate()`-compatible on a given day (docs/DECISIONS.md
+#98) or what today's default assumptions are; (2) it's the natural seam
+wallet mode will need later (#10/#61) -- "candidate universe = full
+catalog + my currently-open cards" is a straightforward extension of the
+same parameter, not a new one.
+
+### 100. Response scope: frontier + classification + robustness only --
+explain.py's surfaces are NOT wired into this endpoint
+
+Part E SS E.1's ASSEMBLE step lists "frontier, ICV table,
+classifications, size recommendation, explanations." The first four map
+directly onto `frontier.build_frontier` + `classify.classify_portfolio`'s
+existing outputs, assembled here one-to-one. "Explanations" (`optimiser/
+explain.py`'s why-this-card ledger, threshold funding report, crossover
+scans, marginal value curves) is deliberately NOT bundled into
+`OptimiseResponse` -- every one of those functions needs its own
+per-query input (which two portfolios to compare for a crossover, which
+category to sweep for a marginal-value curve) that a single "give me the
+optimal portfolio" response has no natural way to supply generically for
+every possible question a user might ask. These stay available as
+already-tested library functions for future dedicated endpoints (an
+`/explain/*` family), not force-fit into this one's shape.
+
+### 101. No persistence -- consistent with Phase 3's own deferral, not a
+new gap
+
+SS E.1's own output line ("written to `optimisation_runs` +
+`portfolio_subset_results` + `evaluation_runs`") isn't implemented --
+`/optimise` computes and returns everything in one request/response
+cycle, same posture Phase 3's `/evaluate` already established
+("evaluation_runs/evaluation_traces persistence: not yet done"). No new
+decision needed here, just confirming the pattern holds.
+
+### 102. Frontier's T1/T2 constants and scenarios.py's Low/High factors
+stay at their module defaults -- not exposed as per-request overrides
+
+`OptimiseRequest` exposes candidate-selection tuning (`standalone_n`,
+`champion_*`, `max_total_candidates`) and classification tuning
+(`icv_meaningful`, `strategic_feature_cards`) as request fields, but NOT
+frontier.py's `abs_floor`/`rel_pct`/`fee_cover_ratio`/`fee_de_minimis`
+(#82) or scenarios.py's `low_factor`/`high_factor` (#90). Those five are
+still flagged FOR Satya's sign-off, not yet signed off -- exposing them as
+ad hoc per-request knobs before that sign-off happens would let a caller
+silently override a registry value nobody has actually approved as
+editable yet. Easy to add once C.7's registry has a real home for them;
+not done speculatively now.
+
+### Verification
+
+`tests/test_api_optimise.py` (6 tests), FastAPI `TestClient` against
+`SyntheticCatalogRepository` (same pattern as `test_api_evaluate.py`).
+End-to-end run on `{syn_ecom, syn_flat}` at Rs12,00,000/yr ecommerce
+reproduces test_frontier.py's and test_scenarios.py's own independently
+hand-verified numbers exactly through the full HTTP stack (frontier
+points Rs21,600.00/Rs26,400.00, DeltaV=Rs4,800.00, ICVs Rs8,400.00/
+Rs4,800.00 both KEEP, robustness `v_low`=Rs22,800.00) -- proof the
+orchestration wiring introduces no drift from the already-verified
+per-module numbers. `n_tol=1` caps the recommendation via the API exactly
+as `test_frontier.py`'s own unit test does. `run_scenarios=false` is
+confirmed to leave `robustness=null` and `t3_pass=null` (not a default
+pass/fail). The `_partition_universe` filter is checked two ways: `syn_
+slab` alongside a compatible card excludes cleanly (recommendation still
+succeeds on the survivor) and two incompatible cards together correctly
+return 422 rather than a confusing empty-success response. A manual
+smoke run against the FULL live catalog (all 12 cards, `candidate_
+universe` omitted) confirmed the predicted exclusion set (`syn_points`,
+`syn_slab`, `syn_lounge`) and produced a sane end-to-end recommendation
+with no unhandled exception -- the scenario none of the pinned-universe
+unit tests exercise directly.
+
+271/271 tests green (265 prior + 6 new). **Phase 4 complete.**

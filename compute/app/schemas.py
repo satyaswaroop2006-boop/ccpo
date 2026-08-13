@@ -15,6 +15,16 @@ from pydantic import BaseModel, Field
 from engine.assemble import NACVResult, TraceLine
 from engine.evaluate import EvaluateAssumptions, EvaluateResult
 from engine.normalise import CategorySpend, SpendInput
+from optimiser.candidates import (
+    DEFAULT_CHAMPION_CATEGORY_THRESHOLD,
+    DEFAULT_CHAMPION_DELTA,
+    DEFAULT_CHAMPION_TOP_N,
+    DEFAULT_MAX_TOTAL,
+    DEFAULT_STANDALONE_N,
+)
+from optimiser.classify import CardClassification, DEFAULT_ICV_MEANINGFUL
+from optimiser.frontier import FrontierPoint, RecommendationStep, format_step
+from optimiser.scenarios import PortfolioRobustness
 
 Geography = Literal["domestic", "international"]
 
@@ -146,3 +156,123 @@ class NextBestSpendResultOut(BaseModel):
 
 class NextBestSpendResponse(BaseModel):
     results: list[NextBestSpendResultOut]  # best (highest delta_nacv_rate) first
+
+
+CardinalityMode = Literal["exactly", "up_to", "optimiser_decides"]
+
+
+class OptimiseRequest(BaseModel):
+    """Part E SS E.1's end-to-end flow (candidates -> enumerate -> allocate
+    -> evaluate -> repair -> frontier/classify), minus the two pieces still
+    genuinely deferred elsewhere: SNAPSHOT (no rule-version/assumptions
+    freeze table exists yet, same gap as evaluation_runs persistence,
+    docs/DECISIONS.md's Phase 3 status) and wallet mode (#10/#61,
+    unbuilt). `candidate_universe=None` pulls the full live catalog via
+    `CardRepository.get_all_card_bundles`; set it to pin a specific set of
+    keys instead (also how tests keep this endpoint fast and
+    deterministic). Frontier's T1/T2 constants and scenarios.py's
+    Low/High factors stay at their module defaults (docs/DECISIONS.md
+    #82/#90) -- not yet exposed as per-request overrides, since neither
+    has Satya's sign-off as an assumptions-registry value a caller should
+    be able to move."""
+
+    spend: list[SpendItemIn]
+    assumptions: AssumptionsIn = Field(default_factory=AssumptionsIn)
+    candidate_universe: list[str] | None = None
+    cardinality_mode: CardinalityMode = "up_to"
+    max_cards: int | None = None
+    n_tol: int | None = None
+    run_scenarios: bool = True
+    icv_meaningful: Decimal = DEFAULT_ICV_MEANINGFUL
+    strategic_feature_cards: list[str] = Field(default_factory=list)
+    standalone_n: int = DEFAULT_STANDALONE_N
+    champion_category_threshold: Decimal = DEFAULT_CHAMPION_CATEGORY_THRESHOLD
+    champion_top_n: int = DEFAULT_CHAMPION_TOP_N
+    champion_delta: Decimal = DEFAULT_CHAMPION_DELTA
+    max_total_candidates: int = DEFAULT_MAX_TOTAL
+
+
+class ExcludedCardOut(BaseModel):
+    """A universe card `optimiser.allocate.allocate` (+ `repair`) couldn't
+    process at all, so it never reached candidate selection -- SS E.2's
+    own "why was card X even considered / not considered" transparency
+    principle, applied one level earlier than SS E.2 itself describes
+    (before ranking, not after)."""
+
+    card_key: str
+    reason: str
+
+
+class FrontierPointOut(BaseModel):
+    size: int
+    subset_key: str
+    card_keys: tuple[str, ...]
+    pv_exact: Decimal
+
+    @classmethod
+    def from_point(cls, point: FrontierPoint) -> "FrontierPointOut":
+        return cls(size=point.size, subset_key=point.subset_key, card_keys=point.card_keys, pv_exact=point.pv_exact)
+
+
+class RecommendationStepOut(BaseModel):
+    size: int
+    delta_v: Decimal
+    t1_pass: bool
+    t1_threshold: Decimal
+    delta_fee: Decimal
+    delta_gross_benefit: Decimal
+    fee_cover_ratio: Decimal | None
+    t2_pass: bool
+    low_spend_delta_v: Decimal | None
+    t3_pass: bool | None
+    passes: bool
+    explanation: str  # SS E.9's own worked-example phrasing, plain rupees
+
+    @classmethod
+    def from_step(cls, step: RecommendationStep) -> "RecommendationStepOut":
+        return cls(
+            size=step.size, delta_v=step.delta_v, t1_pass=step.t1_pass, t1_threshold=step.t1_threshold,
+            delta_fee=step.delta_fee, delta_gross_benefit=step.delta_gross_benefit,
+            fee_cover_ratio=step.fee_cover_ratio, t2_pass=step.t2_pass, low_spend_delta_v=step.low_spend_delta_v,
+            t3_pass=step.t3_pass, passes=step.passes, explanation=format_step(step),
+        )
+
+
+class CardClassificationOut(BaseModel):
+    card_key: str
+    label: str
+    icv: Decimal
+    overlap: Decimal | None
+    note: str | None
+    downgrade_to: str | None
+
+    @classmethod
+    def from_classification(cls, c: CardClassification) -> "CardClassificationOut":
+        return cls(card_key=c.card_key, label=c.label, icv=c.icv, overlap=c.overlap, note=c.note, downgrade_to=c.downgrade_to)
+
+
+class RobustnessOut(BaseModel):
+    v_expected: Decimal
+    v_low: Decimal
+    v_high: Decimal
+    robustness: Decimal | None
+    rank_stable: bool
+
+    @classmethod
+    def from_robustness(cls, r: PortfolioRobustness) -> "RobustnessOut":
+        return cls(v_expected=r.v_expected, v_low=r.v_low, v_high=r.v_high, robustness=r.robustness, rank_stable=r.rank_stable)
+
+
+class OptimiseResponse(BaseModel):
+    candidates: list[str]  # SS E.2's pre-filtered set, after excluded_cards is removed
+    excluded_cards: list[ExcludedCardOut]
+    frontier: list[FrontierPointOut]  # one winner per enumerated size (SS E.9)
+    recommendation_steps: list[RecommendationStepOut]
+    recommended_size: int
+    capped_by_tolerance: bool
+    recommended_subset_key: str
+    recommended_card_keys: tuple[str, ...]
+    recommended_pv_exact: Decimal
+    classification_owned: list[CardClassificationOut]  # the recommended portfolio's own cards (SS E.8)
+    classification_candidates: list[CardClassificationOut]  # candidates not in the recommended portfolio
+    robustness: RobustnessOut | None  # None when run_scenarios=False

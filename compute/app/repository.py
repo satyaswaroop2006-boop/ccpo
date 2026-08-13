@@ -40,6 +40,8 @@ class CardRepository(Protocol):
 
     def get_currencies(self) -> dict[str, RewardCurrency]: ...
 
+    def get_all_card_bundles(self) -> list[CardRuleBundle]: ...
+
 
 class SyntheticCatalogRepository:
     """Backed by `seeds/synthetic_cards.py` -- the 12 structural test cards
@@ -60,6 +62,13 @@ class SyntheticCatalogRepository:
 
     def get_currencies(self) -> dict[str, RewardCurrency]:
         return self._currencies
+
+    def get_all_card_bundles(self) -> list[CardRuleBundle]:
+        """Part E SS E.2's candidate-selection input: "live card universe."
+        Every card in the fixture set, in seed order -- `optimiser/
+        candidates.py::select_candidates` does its own ranking, so no
+        ordering guarantee is needed here beyond determinism."""
+        return [bundle_from_dict(c) for c in CARDS]
 
 
 class PostgresCardRepository:
@@ -82,6 +91,22 @@ class PostgresCardRepository:
 
     def get_currencies(self) -> dict[str, RewardCurrency]:
         return currencies_from_dicts(_fetch_currency_dicts(self._conn))
+
+    def get_all_card_bundles(self) -> list[CardRuleBundle]:
+        """One query for the live key list, then `_fetch_card_dict` per key
+        (N+1, same per-card query shape `get_card_bundle` already uses) --
+        simplest correct option at today's catalog size; a single wide
+        query is a performance follow-up, not a correctness concern."""
+        keys = _fetch_all_card_keys(self._conn)
+        return [bundle_from_dict(_fetch_card_dict(self._conn, key)) for key in keys]
+
+
+def _fetch_all_card_keys(conn: psycopg.Connection) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select c.key from cards c join current_card_versions cv on cv.card_id = c.id order by c.key"
+        )
+        return [row[0] for row in cur.fetchall()]
 
 
 def _fetch_card_dict(conn: psycopg.Connection, card_key: str) -> dict | None:

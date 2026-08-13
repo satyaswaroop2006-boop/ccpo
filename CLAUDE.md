@@ -81,7 +81,7 @@ decision in `docs/DECISIONS.md` (create on first use).
       #10's deferral) — the repair *pass* over the breakpoint compiler
       (already done, `breakpoints.py`) is separately Phase 4
       (`optimiser/repair.py` per E.0).
-- [~] Phase 4 — optimiser (E.2–E.9), `/optimise`, repair pass.
+- [x] Phase 4 — optimiser (E.2–E.9, E.11–E.12), `/optimise`, repair pass.
       **Slice 1 done**: `optimiser/allocate.py` — the inner MILP for a
       *fixed* card subset (Part B SS B.2–B.4, Part E SS E.4), PuLP +
       HiGHS (CBC fallback verified). Continuous variables only (`x`, `s`)
@@ -132,9 +132,111 @@ decision in `docs/DECISIONS.md` (create on first use).
       union/trim mechanics concretely (a tight standalone cut still gets
       rescued by champions; trimming only ever removes a standalone-only,
       non-champion card). 231/231 tests green.
-      **Remaining build order** (#68): `optimiser/frontier.py` +
-      `optimiser/classify.py` (E.8–E.9) → `optimiser/scenarios.py`
-      (E.11) → `optimiser/explain.py` (E.12) + `POST /optimise`.
+      **Slice 5 done**: `optimiser/frontier.py` (E.9, efficient frontier +
+      the transparent size-recommendation checklist) + `optimiser/
+      classify.py` (E.8, ICV/Overlap + KEEP/OPTIONAL/CLOSE/HOLD/ADD/
+      DOWNGRADE). `build_frontier` groups enumerate.py's results by size,
+      keeps the max-pv_exact winner per size, then walks consecutive
+      steps against T1 (materiality, ≥max(₹2,000, 3%·V(n))), T2 (fee-cover,
+      ΔGrossBenefit/ΔF≥1.5 or ΔF≤₹1,000 — ΔF read as a portfolio-total
+      fee delta since the frontier gives no nesting guarantee, #79) and
+      T3 (scenario floor — optional, `None`/"not evaluated" until
+      `optimiser/scenarios.py` exists to supply low-spend numbers, #78).
+      `classify_portfolio` computes ICV via lookup into an already-
+      enumerated result set, falling back to one ad hoc `allocate()`+
+      `repair()` solve when the exact subset wasn't swept (SS E.8's own
+      "if enumerated; else one extra solve" clause) — verified this
+      recovers the identical value a full sweep would give. DOWNGRADE
+      and HOLD are spec-complete but have no real fixture yet: no card
+      anywhere in the repo carries a `family_key` (Part D §D.3, never
+      added to the schema) and no user-constraint model exists to derive
+      a "strategic feature" flag from, so both are tested against
+      directly-constructed data rather than the live catalog (#79).
+      Verified end-to-end through the real engine where a fixture exists
+      (syn_ecom+syn_flat frontier and 2-card ICV both match independent
+      hand computations exactly) plus targeted unit tests for T2/T3/
+      DOWNGRADE/HOLD's own arithmetic. 248/248 tests green.
+      **Slice 6 done**: `optimiser/scenarios.py` (E.11, Low/Expected/High
+      spend sweeps). `run_scenarios` re-runs `enumerate_subsets` at 0.8x/
+      1.2x spend over the *same* candidate-card list the caller's
+      expected-spend sweep already used (an `expected_results` param lets
+      that sweep be reused rather than solved a third time); `scale_spend`
+      multiplies both `CategorySpend.annual_amount` and
+      `UpiAggregateSpend.monthly_amount` uniformly — per-category scenario
+      editing is explicitly a later spec increment, not done here.
+      `robustness_for` reports `Robustness = V_low/V_expected` (`None`,
+      not a fabricated ratio, when a portfolio has no positive expected
+      value to keep) and rank stability (does the portfolio stay in the
+      top-3 across all three sweeps, ranked among every enumerated
+      subset, not just same-size ones); `low_spend_pv_by_subset_key`
+      packages the Low sweep straight into `frontier.build_frontier`'s
+      T3 parameter. Verified end-to-end on two real fixtures (Low/
+      Expected/High numbers match hand computation exactly at both
+      Rs6,00,000/yr and Rs12,00,000/yr spend; the second one's Low sweep
+      is fed live into `build_frontier` and confirmed to pass T3
+      correctly) plus fabricated-data tests for the "drops out of top-3"
+      and "V_expected<=0" edge cases no real fixture produces. 255/255
+      tests green.
+      **Slice 7 done**: `optimiser/explain.py` (E.12, explainability).
+      Covers 4 of SS E.12's 5 surfaces — the 5th (marginal bands / Next-
+      Best-Spend) is already `POST /next-best-spend` from Phase 3, not
+      rebuilt. `build_card_ledger` groups a card's existing trace into
+      SS37's reward/milestones/benefits/costs buckets (inherits #27's
+      "reward is one lump line, not base/bonus split" gap — documented,
+      not hidden). `threshold_funding_report` reports every threshold's
+      funded/short status by reusing `repair.py`'s own pooling logic
+      (`pooled_spend_per_instance`, promoted from private to public);
+      deliberately doesn't cover cap-*binding* state (needs Stage 5
+      internals nothing exposes yet, #93). `scan_driver`/
+      `find_smallest_flip` (SS38 crossovers + "what could change this?")
+      vary one spend line across a grid and re-solve both candidate
+      portfolios via `allocate`+`repair` at each point — always a full
+      re-solve, not a literal "evaluator only" shortcut, since freezing
+      an old allocation's split would silently understate value once a
+      card's segments saturate differently (#94). `marginal_value_curve`
+      sweeps one card through the evaluator and annotates kinks from
+      `breakpoints.py`'s compiled list — caught and fixed a real bug
+      before it shipped: a monthly-window cap's breakpoint (e.g.
+      "Rs20,000/month") has to be multiplied by its window's yearly
+      instance count before comparing against an ANNUAL spend grid, or
+      the kink marker lands nowhere near where the curve actually bends
+      (#95, verified against 5 hand-computed curve points showing the
+      real slope change at Rs2,40,000, not Rs20,000). No new assumption-
+      registry defaults this slice — everything here reshapes numbers the
+      engine already produces. 265/265 tests green.
+      **Slice 8 done — Phase 4 complete**: `POST /optimise` (`app/
+      main.py`), wiring candidates → enumerate → scenarios → frontier →
+      classify into one endpoint. `CardRepository` gained
+      `get_all_card_bundles()` (SS E.2's "live card universe" input,
+      didn't exist before — both implementations). Discovered and fixed
+      before shipping: feeding the FULL live catalog into candidate
+      selection crashes it the moment ANY one card is
+      allocate()-incompatible (3 of today's 12 synthetic cards are:
+      `syn_points`/`syn_slab` are genuine `allocate.py` scope gaps #68/
+      #70; `syn_lounge` just needs `benefit_need`/`benefit_unit_value`
+      assumptions supplied). Fixed with `_partition_universe`, a
+      pre-flight `allocate()`+`repair()` compatibility probe per universe
+      card at the API layer only — `optimiser/candidates.py`/`allocate.py`/
+      `repair.py` themselves are untouched and still raise exactly as
+      before for direct callers; excluded cards are reported in the
+      response with their reason (`excluded_cards`), never silently
+      dropped (#97/#98). `candidate_universe` is an explicit override
+      (`None` = full catalog) — also the seam wallet mode will extend
+      later (#99). Response = frontier + size-recommendation checklist +
+      ICV classification (owned + candidates) + robustness — explain.py's
+      crossover/curve/ledger surfaces deliberately NOT bundled in (each
+      needs its own per-query inputs a single response can't supply
+      generically; left for future dedicated endpoints, #100). No
+      persistence yet (`optimisation_runs`/`portfolio_subset_results`/
+      `evaluation_runs`), same deferral as Phase 3's `/evaluate` (#101).
+      Verified end-to-end via `TestClient`: reproduces test_frontier.py's
+      and test_scenarios.py's own independently hand-verified numbers
+      exactly through the full HTTP stack, plus a manual smoke run
+      against the complete 12-card live catalog confirming the predicted
+      3-card exclusion set and a clean end-to-end recommendation. 271/271
+      tests green.
+
+Phase 4's module list (Part E §E.0) is now fully built and wired.
 - [ ] Phase 5 — real card ingestion (Part I workflow)
 - [ ] Phase 6 — frontend (Part F, to be authored)
 
