@@ -1,0 +1,65 @@
+{
+  "id": "golden_sbi_cashback_v1",
+  "card": "cashback_sbi",
+  "bundle": "sbi_cashback_v1",
+  "purpose": "First REAL card golden. Two scenarios: (A) reproduces SBI's own worked example from the e-kit PDF pg 33 (the issuer did the arithmetic for us), proving cap + exclusion + floor logic on real terms; (B) a steady-state annual case that binds the online cap, for the optimiser/evaluator path.",
+
+  "scenario_A_pdf_worked_example": {
+    "purpose": "Single statement-month, matches PDF pg 33 exactly.",
+    "spend_statement_month": {
+      "online_non_emi": 25000,
+      "online_emi": 10000,
+      "offline": 10000
+    },
+    "_hand_computation": [
+      "PDF states: total spend 45,000 = online 35,000 + offline 10,000; of online, 10,000 was an EMI purchase.",
+      "EMI purchases are excluded from cashback -> eligible online = 35,000 - 10,000 = 25,000.",
+      "Online cashback = 25,000 x 5% = 1,250 (below online cap 2,000).",
+      "Offline cashback = 10,000 x 1% = 100 (below offline cap 2,000).",
+      "Aggregate = 1,250 + 100 = 1,350 (below aggregate cap 4,000).",
+      "SBI's stated answer: 1,350. MATCH."
+    ],
+    "expected": {
+      "cashback_online": 1250.00,
+      "cashback_offline": 100.00,
+      "cashback_total": 1350.00
+    },
+    "tolerance_rupees": 0.01
+  },
+
+  "scenario_B_steady_state_annual": {
+    "purpose": "Annual steady-state, uniform seasonality, binds the online monthly cap. This is the value the optimiser selects on.",
+    "year_mode": "steady_state",
+    "spend_annual": {
+      "ecommerce/online": 600000,
+      "offline_retail/pos": 240000
+    },
+    "_spend_annual_note": "Keys use the golden-battery's own 'category[/channel]' convention (tests/test_goldens.py::_parse_spend_annual) -- category choice (ecommerce, offline_retail) is arbitrary within online_5pct/offline_1pct's channel-only selectors (they don't constrain category), picked only because both have a Rs0-floor-loss ticket size at these rates (Rs1800*5%=Rs90.00, Rs1500*1%=Rs15.00 exactly, see docs/DECISIONS.md).",
+    "seasonality": "uniform",
+    "_hand_computation": [
+      "Monthly online = 600,000 / 12 = 50,000. Monthly offline = 240,000 / 12 = 20,000.",
+      "Online monthly cashback = 50,000 x 5% = 2,500, BUT online cap = 2,000/cycle -> capped to 2,000. Overflow earns zero.",
+      "Offline monthly cashback = 20,000 x 1% = 200 (below offline cap 2,000).",
+      "Monthly total = 2,000 + 200 = 2,200 (below aggregate cap 4,000).",
+      "Annual gross cashback = 2,200 x 12 = 26,400 (cashback_inr, v=1).",
+      "Waiver-eligible annual spend = 8,40,000 >= 2,00,000 -> renewal fee WAIVED -> steady-state fee = 0.",
+      "NACV steady-state = 26,400 - 0 = 26,400.",
+      "Year-1: joining fee 999 x 1.18 (GST) = 1,178.82. Year-1 value = 26,400 - 1,178.82 = 25,221.18."
+    ],
+    "expected": {
+      "gross_reward_value": 26400.00,
+      "waiver_achieved": true,
+      "fee_paid": 0.00,
+      "nacv_steady_state": 26400.00,
+      "nacv_year_1": 25221.18
+    },
+    "tolerance_rupees": 0.01
+  },
+
+  "_notes": [
+    "Scenario A is the strongest possible correctness check: the issuer published the expected answer.",
+    "Scenario B deliberately drives online spend past the 2,000 cap so the golden tests cap-binding + overflow=zero, not just linear accrual.",
+    "Both use channels (online/offline), which exercises channel-based selectors on real data.",
+    "If either scenario is red, the bug is in the engine or the bundle, NOT the expected values (arithmetic shown above)."
+  ]
+}

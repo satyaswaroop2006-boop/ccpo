@@ -1,0 +1,176 @@
+{
+  "bundle_id": "sbi_cashback_v1",
+  "key": "cashback_sbi",
+  "name": "CASHBACK SBI Card",
+  "issuer_key": "sbi_card",
+  "network": "visa",
+  "effective_from": "2026-01-01",
+  "status": "draft",
+
+  "_sources": {
+    "reward_terms": {
+      "source_type": "reward_terms",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/ekit-tncs/cashback-tnc-ekit.pdf",
+      "snapshot_note": "CASHBACK SBI Card e-kit T&C, 47pp. Section 11 (Card Cashback) and Section 13 (fuel surcharge) are the ingested reward source.",
+      "authoritative_for": ["earning_rules", "caps", "exclusions", "surcharge_waiver"],
+      "reviewer_status": "unreviewed"
+    },
+    "mitc": {
+      "source_type": "mitc",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/most-important-terms-and-conditions/mitc-english.pdf",
+      "issuer_level": true,
+      "authoritative_for": ["annual_fee", "joining_fee", "renewal_waiver_threshold", "forex_markup"],
+      "reviewer_status": "unreviewed"
+    }
+  },
+
+  "version": {
+    "joining_fee": 999,
+    "annual_fee": 999,
+    "gst_rate": 0.18,
+    "forex_markup": 0.035,
+    "_source": "mitc",
+    "_note": "Fee 999/999, renewal waived on annual spend >= 2,00,000 (see waiver threshold). Forex 3.5% (MITC standard, non-premium tier)."
+  },
+
+  "currency": "cashback_inr",
+  "currencies": [
+    {
+      "key": "cashback_inr",
+      "routes": [
+        { "key": "statement_credit", "route_type": "statement_credit", "ratio": 1.0, "friction_default": 1.0 }
+      ],
+      "_note": "Direct statement-credit cashback. v = 1. No redemption ambiguity."
+    }
+  ],
+
+  "earning_rules": [
+    {
+      "key": "online_5pct",
+      "selector": { "channels": ["online"] },
+      "accrual": { "type": "percentage", "rate": 0.05, "rounding": "floor_paise_per_txn", "currency": "cashback_inr" },
+      "caps": ["cap_online_monthly", "cap_aggregate_monthly"],
+      "priority": 100,
+      "_source": "reward_terms",
+      "_note": "5% on online spends. 'Online' identified by network online indicators (T&C 11.1.c). Floor rounding per txn (T&C 11.1.v: 2999 x 5% = 149, floored from 149.95)."
+    },
+    {
+      "key": "offline_1pct",
+      "selector": { "channels": ["pos", "contactless"] },
+      "accrual": { "type": "percentage", "rate": 0.01, "rounding": "floor_paise_per_txn", "currency": "cashback_inr" },
+      "caps": ["cap_offline_monthly", "cap_aggregate_monthly"],
+      "priority": 90,
+      "_source": "reward_terms",
+      "_note": "1% on offline (non-online) spends. Any txn not flagged online is offline."
+    }
+  ],
+
+  "caps": [
+    {
+      "key": "cap_online_monthly",
+      "measure": "reward",
+      "amount": 2000,
+      "window_def": { "kind": "statement_cycle" },
+      "scope": "rule",
+      "overflow": "zero",
+      "_source": "reward_terms",
+      "_note": "Max 2,000 cashback on online per statement cycle. Overflow earns nothing (T&C 11: 'will not accrue any cashback till next cycle'). Statement-cycle approximated as calendar month (MVP; trace-flag cycle_approximated)."
+    },
+    {
+      "key": "cap_offline_monthly",
+      "measure": "reward",
+      "amount": 2000,
+      "window_def": { "kind": "statement_cycle" },
+      "scope": "rule",
+      "overflow": "zero",
+      "_source": "reward_terms",
+      "_note": "Max 2,000 cashback on offline per statement cycle."
+    },
+    {
+      "key": "cap_aggregate_monthly",
+      "measure": "reward",
+      "amount": 4000,
+      "window_def": { "kind": "statement_cycle" },
+      "scope": "card",
+      "overflow": "zero",
+      "_source": "reward_terms",
+      "_note": "Aggregate online+offline cashback capped 4,000 per statement cycle. Card-scoped so it binds across both earning rules."
+    }
+  ],
+
+  "exclusions": [
+    {
+      "key": "cashback_mcc_exclusions",
+      "selector": {
+        "mcc_include": [
+          5172, 5541, 5542, 5983,
+          6540, 6541,
+          6513, 7349,
+          5051, 5094, 7631, 5944,
+          5111, 5192, 5942, 5943, 8211, 8220, 8241, 8244, 8249, 8299, 8351,
+          4900, 4814, 4816, 4899, 9399,
+          5960, 6300, 6381,
+          5947,
+          4011, 4112,
+          6011, 6012, 6051,
+          7993, 7994, 5816,
+          4784,
+          9222, 9311, 9402
+        ]
+      },
+      "excluded_from": ["rewards"],
+      "_source": "reward_terms",
+      "_note": "No cashback on: fuel, wallet, rent, jewelry, education, utility, insurance, card/gift/novelty, railways, member-FI/quasi-cash, digital gaming, tolls, government. MCC list per T&C 11.1.d table. These still count toward fee-waiver spend (not excluded from fee_waiver scope)."
+    },
+    {
+      "key": "min_txn_100",
+      "selector": { "txn_max": 100 },
+      "excluded_from": ["rewards"],
+      "_source": "reward_terms",
+      "_note": "Cashback not applicable on transactions less than 100 (T&C 11.1.s). Modelled as exclusion of sub-100 txns from rewards. NOTE: category-mode approximation cannot see individual txns; flag as txn-mode-only precision."
+    }
+  ],
+
+  "_engine_compatibility_note": "Both entries in exclusions[] above use selector fields (mcc_include, txn_max) that Part C defines but engine/card_bundle.py::_exclusion_selector_from_dict does not read, and engine/eligibility.py cannot evaluate (Stage 2 only supports categories/channels/merchant_group/geography). These are the CORRECT Part C field names -- this is an engine-support gap, not a naming error, so nothing here was renamed. IMPORTANT: loading exclusions[] as-is through bundle_from_dict is UNSAFE, not just inert -- _exclusion_selector_from_dict silently drops mcc_include/txn_max, producing an ExclusionSelector with every field None, which engine/eligibility.py's _selector_matches treats as MATCHES EVERYTHING. Since excluded_from=['rewards'], this would zero out ALL cashback, not just the intended fuel/rent/sub-Rs100 spend. Any tooling loading this bundle must drop or specially handle exclusions[] until MCC/txn-value selector support lands in the engine. See docs/DECISIONS.md #111; tests/test_golden_sbi_cashback.py's _adapt_ingestion_bundle demonstrates the safe handling.",
+
+  "thresholds": [
+    {
+      "key": "fee_waiver",
+      "basis": { "measure": "waiver_eligible_spend", "window": { "kind": "anniversary_year" } },
+      "tier_mode": "cumulative",
+      "tiers": [
+        { "tier_index": 1, "threshold_amount": 200000, "payload": { "type": "waive_fee", "fee": "annual" } }
+      ],
+      "_source": "mitc",
+      "_note": "Renewal fee waived on annual spend >= 2,00,000. Waiver-eligible spend = all spend (rent/fuel excluded from REWARDS but NOT from waiver, unless MITC says otherwise — confirm rent inclusion in review)."
+    }
+  ],
+
+  "surcharges": [
+    {
+      "key": "fuel_surcharge_waiver",
+      "selector": { "categories": ["fuel"] },
+      "rate": 0.01,
+      "waiver": {
+        "rate": 0.01,
+        "txn_min": 500,
+        "txn_max": 3000,
+        "cap_amount": 100,
+        "cap_window": { "kind": "statement_cycle" }
+      },
+      "gst_on_surcharge": 0.18,
+      "_source": "reward_terms",
+      "_note": "1% fuel surcharge waiver on txns 500-3000, max 100/statement/account (FAQ 17 + T&C 13.1). engine/costs.py::Surcharge has no field for the 'waiver' sub-object above -- it is NOT consumed by bundle_from_dict (silently ignored, same as any other unread key), and the refund it describes is NOT modelled anywhere yet. Per docs/DECISIONS.md #26's syn_fuel precedent, this needs to become a SEPARATE capped earning_rule (refunding the surcharge) before this card's real fuel-surcharge economics are correctly represented. See docs/DECISIONS.md #110."
+    }
+  ],
+
+  "benefits": [],
+
+  "_review_checklist": [
+    "Confirm 'online' vs 'offline' channel mapping matches how SBI flags transactions (network online indicator).",
+    "Confirm whether rent (MCC 6513/7349) counts toward the 2L fee-waiver even though excluded from rewards — MITC/T&C wording.",
+    "Confirm forex 3.5% for CASHBACK specifically in the MITC fee table (not a premium-tier exception).",
+    "Statement-cycle caps approximated as calendar-month for MVP — flagged, acceptable per A.17.",
+    "Sub-100 txn exclusion is txn-mode-only; category-mode value will slightly overstate — acceptable, flagged."
+  ]
+}

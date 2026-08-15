@@ -5,6 +5,39 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
+## Status as of 2026-08-15 (Phase 5 -- first real-card pipeline validation)
+
+Satya hand-drafted the first real ingestion bundle (`compute/ingestion/
+bundle_sbi_cashback.json`, CASHBACK SBI Card, from the e-kit T&C + MITC)
+plus its golden (`golden_sbi_cashback.json`) *before* Part I's own tooling
+(SS I.9) exists -- a deliberate pipeline-validation exercise, not the
+first bulk load. Wired against the engine directly (`tests/
+test_golden_sbi_cashback.py`), NOT published, NOT written to Postgres.
+Found real schema-fit gaps (below) exactly as Part I SS I.0 anticipated
+someone would; none were silently worked around. 273/273 tests green + 1
+deliberately skipped (Scenario A, a genuine schema gap, not a bug). See
+the dated entry below for full detail; this is the first empirical test
+of Part I's own discipline, not just its prose. Satya then asked for the
+bundle/golden files themselves to be renamed to match the loader's
+naming (#113) -- done directly (both files edited in place this time,
+unlike the earlier test-only-adapter approach), same 273/273 + 1 skipped
+afterward, confirming the rename changed no numbers.
+
+## Status as of 2026-08-13 (Phase 5 kickoff -- Part I drafted, awaiting sign-off)
+
+**Phase 5 is blocked on approval, by design.** `docs/Part_I_Ingestion_
+Workflow.md` did not exist anywhere in the repo -- CLAUDE.md rule 4 and
+Part C SS C.9 both reference "the Part I ingestion workflow" as if it
+already existed, but it was never authored. Per CLAUDE.md's own
+instruction ("if the spec is ambiguous or seems wrong, STOP and ask
+Satya"), this was flagged before writing any Phase 5 code; Satya asked
+for the document itself to be drafted first, for his review, with no
+`compute/` code following until it's approved. See the dated entry below
+for what's in it and the judgment calls made while drafting. **No
+ingestion code exists yet** -- Part I SS I.9 specifies the intended
+tooling shape (`ingest lint/link/review-queue/publish`) as a target for
+the next task, once the document itself is signed off.
+
 ## Status as of 2026-08-13 (Phase 4 complete -- POST /optimise)
 
 Phase 2 complete: all 11 engine stages + `breakpoints.py` implemented,
@@ -2317,3 +2350,317 @@ with no unhandled exception -- the scenario none of the pinned-universe
 unit tests exercise directly.
 
 271/271 tests green (265 prior + 6 new). **Phase 4 complete.**
+
+---
+
+## 2026-08-13 -- docs/Part_I_Ingestion_Workflow.md drafted (Phase 5 kickoff)
+
+### 103. Part I didn't exist -- stopped before writing any Phase 5 code,
+per CLAUDE.md's own instruction
+
+Asked to "start Phase 5," first action was opening `docs/` for Part I
+(CLAUDE.md: "read this file fully before doing anything," "open and
+follow that section"). It wasn't there -- only Parts A/B, C, D, E exist.
+Confirmed this wasn't a search miss: grepped the whole `docs/` tree for
+"Part I"/"ingestion"/"sources," found only forward-references FROM other
+parts (Part C SS C.9: "live card data enters only through Part I's
+verified-source workflow"; Part D Decision 4's `source_links` schema,
+built to support a workflow that was never itself specified). This is
+categorically different from Phase 6's frontend gap, which CLAUDE.md
+already marks explicitly ("Part F, to be authored") -- Part I was
+referenced as if it already existed. Asked Satya rather than improvising
+an ingestion architecture unilaterally (AskUserQuestion, three options:
+draft Part I first / Satya supplies an existing doc / skip straight to a
+minimal concrete step). **Satya chose: draft Part I first**, reviewed
+before any `compute/` code follows -- exactly CLAUDE.md's "STOP and ask,
+log the decision, don't silently pick an interpretation" posture, applied
+one level up (to a whole missing spec section, not just an ambiguous
+field).
+
+### 104. Part I's bundle format extends the IMPLEMENTED card-dict shape,
+not Part C SS C.2.10's illustrative JSON verbatim
+
+Noticed while drafting SS I.2: Part C SS C.2.10's `CardRuleSet` example
+uses `"fees": {"joining": 5000, "annual": 5000, "gst_rate": 0.18}`, but
+the actual implemented shape everything in `compute/` consumes
+(`seeds/synthetic_cards.py`'s raw dicts, `engine/card_bundle.py::
+bundle_from_dict`, `supabase/migrations/0001_init.sql`'s `card_versions`
+columns) is flat (`joining_fee`, `annual_fee`, `forex_markup`) and
+nested under `"version"` at the dict layer -- a pre-existing, tolerated
+drift between Part C's illustrative naming and what the code actually
+parses (nothing broke because `bundle_from_dict` was always written
+against the real shape, not literally C.2.10's prose). Part I's ingestion
+bundle format is specified against the REAL shape (so a drafted bundle is
+mechanically close to what `ingest link` will insert, per SS I.9), with a
+note flagging the C.2.10 naming drift explicitly rather than silently
+reproducing it as if it were consistent.
+
+### 105. Source citation granularity is per-THRESHOLD, not per-tier --
+read directly off `source_links.entity_type`'s CHECK constraint, not
+assumed
+
+While designing SS I.2's bundle format, checked what `entity_type` values
+`source_links` actually allows (`0001_init.sql` line ~303-305):
+`card_version, earning_rule, threshold, cap, exclusion, benefit,
+surcharge, redemption_route, reward_currency` -- no `threshold_tier`.
+A citation can only attach at the threshold level, never to one specific
+tier within a multi-tier threshold. Documented as a real schema
+constraint in SS I.2 ("Granularity note, read directly off the schema,
+not assumed") rather than glossed over -- a card whose ₹4L and ₹8L
+milestone tiers come from two different source pages still cites both on
+the ONE threshold object's `source_refs` list; the schema has no finer
+grain than that, and Part I's tooling spec (SS I.9) shouldn't pretend
+otherwise.
+
+### 106. Golden coverage extended to real cards as an explicit PUBLISH
+precondition -- a real, load-bearing decision, not a restatement
+
+Part C SS C.11 states the golden-battery requirement for the 12 SYNTHETIC
+structural examples specifically ("the golden test battery of SS55 plus
+one golden scenario per example card above"). Part I SS I.8 extends this
+principle to every REAL card_version as a hard PUBLISH gate (SS I.4/I.9):
+no card_version reaches `published` without >=1 hand-computed golden
+scenario verified against `engine.evaluate.evaluate_card`, same
+discipline as every `compute/goldens/golden_syn_*.json`. Justification
+recorded in SS I.8 itself: this is the only mechanism in the whole
+pipeline that catches a WRONG TRANSLATION of a correctly-cited source
+(e.g. a selector matching the wrong category) -- structural linting (SS
+I.4 LINT) checks the JSON is well-formed and cited, never that it means
+what the source actually said. `docs/DECISIONS.md` #7 (the real
+`caps.py` index-shift bug a golden caught, that no schema validation
+would have) is the concrete precedent cited for why this matters, not
+just spec-completeness for its own sake.
+
+### 107. Reviewer approval is explicitly a human-only action -- Claude
+(or any automated drafting step) may never self-approve a source_link
+
+SS I.0 and SS I.5 both state this directly, not as boilerplate: an AI
+assistant drafting an ingestion bundle is doing real, useful work
+(capturing sources, transcribing rule text, flagging ambiguity), but
+`source_links.reviewer_status = 'approved'` requires a human
+independently re-checking the cited source -- self-certification by
+whatever produced the draft isn't review, it's just restating the draft
+with more confidence. This is CLAUDE.md rule 4 ("NEVER add real card
+reward data from memory") taken to its logical conclusion: the risk
+rule 4 guards against isn't just Claude typing in a remembered number, 
+it's Claude (or any automation) being trusted to mark its OWN transcription
+verified. The pipeline (SS I.4) makes this structural -- REVIEW is a
+distinct stage after LINK, not a flag any drafting tool can set.
+
+### Scope, deliberately not decided here
+
+- **No scraping/automation architecture specified.** SS I.9 specifies the
+  tooling's INPUT/OUTPUT contract (`ingest lint/link/review-queue/
+  publish`, what each reads and writes) but not how sources get found or
+  fetched (headless browser? manual download? which libraries) --
+  Satya's call when Phase 5 code actually starts, not an ingestion-workflow
+  concern.
+- **No re-verification cadence specified.** SS I.7 states the
+  mechanism (`last_checked_at`, a changed source is a new source per SS
+  I.6) but deliberately leaves HOW OFTEN sources get rechecked as an
+  operational decision, not an engine-level rule.
+- **No actual real card was ingested.** SS I.10's worked example uses an
+  explicitly fictional "Example Bank Ultra" card with invented numbers,
+  flagged as illustrative-only in its own opening line -- CLAUDE.md rule
+  4 applies to this document's own worked example too, not just to future
+  code.
+
+**Status: awaiting Satya's review of `docs/Part_I_Ingestion_Workflow.md`
+in full. No `compute/` code for Phase 5 until it's approved, per his own
+instruction when this was scoped.**
+
+---
+
+## 2026-08-15 -- First real-card ingestion validation: CASHBACK SBI Card
+
+Satya supplied a hand-drafted ingestion bundle and golden ahead of Part
+I's own tooling (SS I.9, not built yet) specifically to pipeline-test the
+engine against real terms. Per his own instructions, worked through in
+order and stopped at the first genuine problem rather than routing around
+it. `docs/Part_C_Rules_Engine_and_JSON_Schema.md` and `docs/
+Part_D_Database_Architecture.md` re-read in full against every field in
+`compute/ingestion/bundle_sbi_cashback.json`, cross-checked against the
+IMPLEMENTED loader (`engine/card_bundle.py::bundle_from_dict`) and the
+real dataclasses (`engine.costs.Surcharge`, `engine.eligibility.
+ExclusionSelector`), not just Part C's prose.
+
+### 108. Six pure field-name mismatches between the bundle's dialect and
+the implemented loader -- exactly the C.2.10-vs-implemented-shape drift
+Part I decision #104 predicted, now observed for real
+
+`card_key`/`key`, `card_name`/`name`, `fees`/`version`,
+`threshold_rules`/`thresholds`, a tier's `threshold`/`threshold_amount`,
+a surcharge's `surcharge_rate`/`rate`. The `threshold_rules`/`thresholds`
+one is the sharpest: as literally written, `bundle_from_dict` would have
+**silently dropped the entire fee-waiver threshold** (`card.get(
+"thresholds", [])` returns `[]`, no error at all) -- precisely the
+"silently drop a field" failure mode Satya's own step 1 instruction
+named. Translated by a new adapter, `_adapt_ingestion_bundle`, in `tests/
+test_golden_sbi_cashback.py` -- **the ingestion bundle file itself was
+never edited**; it's Satya's hand-drafted, source-annotated artifact
+(MITC + e-kit T&C), reviewed as evidence, translation kept entirely on
+the test side and documented inline.
+
+### 109. `currency` block needed restructuring, not renaming
+
+The bundle nests `{key, routes}` inside the card object; the loader
+expects `card["currency"]` to be a bare string, with currency+routes
+declared separately (`currencies_from_dicts` on a standalone list,
+mirroring `seeds/synthetic_cards.py`'s own `CURRENCIES`). As written,
+`bundle.currency_key` would have bound to the whole dict, and the first
+`currencies[bundle.currency_key]` lookup anywhere in the engine would
+raise `TypeError: unhashable type: 'dict'`. Fixed by feeding
+`currencies_from_dicts([raw["currency"]])` as a separate call rather than
+threading it through `_adapt_ingestion_bundle` at all -- the bundle's own
+`{key, routes}` shape already matches what `currencies_from_dicts`
+expects per-entry, it just needed to be pulled out of the card object.
+
+### 110. Surcharge waiver sub-object has no home in the schema at all --
+confirmed against `engine.costs.Surcharge`'s actual fields, not assumed
+
+`surcharges[0].waiver` (1% fuel-surcharge refund, txns Rs500-3,000, capped
+Rs100/statement) has no corresponding field anywhere -- `Surcharge` is
+exactly `key, selector, rate, gst_on_surcharge`. Per the already-settled
+`syn_fuel` precedent (#26: "surcharge waivers are just capped
+negative-cost rules"), this needs to become a SEPARATE capped
+`earning_rule` refunding the surcharge, not a sub-object on the surcharge
+itself -- the bundle doesn't have one yet. Dropped for this run (`_adapt_
+ingestion_bundle` keeps only `rate`/`gst_on_surcharge`/`selector`,
+discards `waiver`) -- confirmed inert for both golden scenarios (neither
+touches fuel spend), but this bundle does NOT yet model the card's real
+fuel-surcharge economics, and won't until that earning_rule is authored.
+
+### 111. Both of the bundle's exclusions use selector fields that are not
+just "unsupported" but actively dangerous if passed through naively --
+confirmed by reading `eligibility.py` directly, not inferred
+
+`cashback_mcc_exclusions` (`mcc_include`) and `min_txn_100` (`txn_max`)
+both use selector fields `engine.card_bundle._exclusion_selector_from_
+dict` silently drops without raising (it only ever reads `categories`/
+`channels`/`merchant_groups`/`geography` from a raw dict -- confirmed by
+reading the function body, not assumed from the earlier-logged "still
+open" item in the table above). The resulting `ExclusionSelector` would
+have every field `None`; `engine.eligibility._selector_matches` treats an
+all-`None` selector as **matches everything** (no early-return-False
+branch ever fires) -- since both exclusions are `excluded_from:
+["rewards"]`, passing either through as literally written would have
+**zeroed out ALL cashback**, not just fuel/rent/sub-Rs100 spend. This is
+sharper than the long-standing "mcc_include/txn_max still rejected" open
+item implied -- for earning-RULE selectors an unsupported field would at
+least raise loudly in some paths; for THIS specific adapter
+(`_exclusion_selector_from_dict`), it fails silently and produces the
+most dangerous possible wrong answer (over-broad exclusion) rather than
+an inert one. Both exclusions omitted entirely for this run (confirmed
+inert for both scenarios: neither touches an MCC-excluded category, and
+`min_txn_100` is txn-mode-only precision by the bundle's own admission,
+inexpressible in category mode regardless of engine support) -- flagged
+loudly in the test file's own docstring, not silently absorbed.
+
+### 112. Scenario A skipped, not worked around -- EMI exclusion has no
+representation anywhere in the schema, confirmed with Satya
+
+Scenario A (SBI's own PDF-published worked example, expected Rs1,350)
+subtracts EMI-converted spend before applying the 5% online rate. Checked
+every place "EMI transaction" could plausibly live: Part C's Selector
+(no EMI dimension in its field list), category-mode `CategorySpend`/
+`SpendSegment` (no EMI field), the bundle's own `exclusions` (neither of
+its two exclusions is EMI-related). The only `is_emi` field anywhere in
+the whole schema is `user_transactions.is_emi` (migration line ~409) --
+transaction-mode-only, not wired into `evaluate_card` at all. Presented
+two honest paths to Satya (pre-filter the test's own input to already-
+eligible spend, vs. treat as a genuine schema gap and defer) rather than
+picking one silently. **Satya chose: defer.** `test_scenario_a_pdf_
+worked_example` is `@pytest.mark.skip`ped with the full reasoning as its
+skip message -- a permanent, visible record in the suite itself, not just
+in this log -- rather than silently omitted or worked around by
+restructuring what the golden's own input represents. EMI/transaction-
+flag selector support is now a real, named future task (Part C SS C.1
+principle 1: "a versioned engine extension, never an ad-hoc special
+case"), not a gap papered over to get one golden green.
+
+### Verification
+
+`tests/test_golden_sbi_cashback.py`: `test_ingestion_bundle_loads_
+without_crashing` confirms the translation itself is complete (every
+KeyError/TypeError above resolved). `test_scenario_b_steady_state_annual`
+verified two ways that agree exactly: stage-by-stage (matching `tests/
+test_goldens.py`'s own pattern) gives the online/offline/cap breakdown
+directly -- online capped to Rs24,000.00/yr (Rs2,000/mo x 12, `cap_
+online_monthly` BINDS every month since Rs50,000/mo x 5% = Rs2,500 >
+Rs2,000), offline uncapped at Rs2,400.00/yr (Rs200/mo x 12, well under
+both its own and the aggregate cap) -- and the full `evaluate_card()`
+orchestrator independently reproduces the identical gross reward, waiver
+achievement, fee, and both NACV figures (Rs26,400.00 steady-state,
+Rs25,221.18 Year-1) against Satya's own hand computation exactly, arbiter-
+by-arithmetic as instructed. Scenario A skipped per #112. 273/273 tests
+green (271 prior + 2 new) + 1 skipped.
+
+**This card_version was never published, never inserted into Postgres --
+this run only validates the engine against a hand-drafted bundle in
+memory.** Per Satya's own step 5: five items remain in the bundle's own
+`_review_checklist` needing human source-verification, plus the newly-
+found gaps above (EMI selector, MCC/txn-value selectors, fuel-surcharge-
+waiver remodelling) before this card could even be RE-DRAFTED completely,
+let alone pass Part I SS I.4's LINK/REVIEW/PUBLISH stages.
+
+---
+
+## 2026-08-15 -- Renamed bundle_sbi_cashback.json / golden_sbi_cashback.json
+in place to match the loader
+
+### 113. The files themselves were edited this time -- a deliberate
+reversal of the earlier "adapter only, never touch the source" posture,
+on Satya's explicit instruction
+
+Entry #108 kept every translation on the test side specifically because
+the bundle was, at that point, Satya's freshly-hand-drafted artifact
+under review -- editing it felt like overwriting evidence mid-review.
+Satya then asked directly for the files to be renamed to match the
+loader. Read as: the naming review is DONE (he's seen the findings, the
+translation is understood and correct), so the translation layer's
+proper home is now the artifact itself, not a shadow adapter a future
+reader would have to discover. Applied:
+
+- `bundle_sbi_cashback.json`: `card_key`->`key`, `card_name`->`name`,
+  `fees`->`version`, `threshold_rules`->`thresholds`, a tier's
+  `threshold`->`threshold_amount`, a surcharge's `surcharge_rate`->
+  `rate`, and `currency` restructured from a card-embedded `{key,
+  routes}` object into a bare string (`"currency": "cashback_inr"`) plus
+  a separate top-level `"currencies": [...]` list -- mirrors `seeds/
+  synthetic_cards.py`'s own standalone `CURRENCIES`, not a new pattern.
+- `golden_sbi_cashback.json`: Scenario B's `spend_annual` keys renamed to
+  the golden-battery's own `"category[/channel]"` convention (`tests/
+  test_goldens.py::_parse_spend_annual`) -- `"online"`/`"offline"` became
+  `"ecommerce/online"`/`"offline_retail/pos"` (category choice arbitrary
+  within the earning rules' channel-only selectors; picked for zero
+  ticket-size floor loss, noted inline in the golden itself now).
+  `fee_paid_steady_state`->`fee_paid`, matching every synthetic golden's
+  own field name.
+
+### 114. What was deliberately NOT renamed, and why -- restated directly
+in the bundle file itself this time, not just in this log
+
+`exclusions[]` and the fuel surcharge's `waiver` sub-object were left
+alone. Renaming implies "this was misspelled"; neither is -- `mcc_include`
+IS Part C's own correct Selector field name, and `waiver` describes a
+real mechanism the schema simply has no object for yet. Fixing the NAME
+wouldn't fix the underlying gap (no engine support; no schema field),
+and pretending it would (e.g. by renaming `exclusions` to something a
+loader wouldn't accidentally pick up) would trade one silent failure mode
+for another. Instead, `bundle_sbi_cashback.json` now carries a permanent
+`_engine_compatibility_note` field stating exactly what #111 already
+established (loading `exclusions[]` as-is is unsafe, not just inert) --
+the warning now lives in the artifact a future ingestion tool would
+actually read, not only in this log and a test-file comment.
+
+### Verification
+
+`_adapt_ingestion_bundle` in `tests/test_golden_sbi_cashback.py` shrank
+from a multi-field translator to a single `{**raw, "exclusions": []}`
+override -- confirms the rename closed every gap it was meant to close,
+leaving only the one gap (#111) that renaming can't close by
+construction. Re-ran the full suite after both file edits: same 273/273
++ 1 skipped, same numbers in `test_scenario_b_steady_state_annual`
+(online Rs24,000.00, offline Rs2,400.00, steady-state Rs26,400.00,
+Year-1 Rs25,221.18) -- the rename moved names, not values, exactly as
+intended.

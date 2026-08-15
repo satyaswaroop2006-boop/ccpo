@@ -237,7 +237,25 @@ decision in `docs/DECISIONS.md` (create on first use).
       tests green.
 
 Phase 4's module list (Part E §E.0) is now fully built and wired.
-- [ ] Phase 5 — real card ingestion (Part I workflow)
+- [ ] Phase 5 — real card ingestion (Part I workflow).
+      **Blocked on sign-off, by design**: `docs/Part_I_Ingestion_
+      Workflow.md` didn't exist anywhere in the repo — only referenced
+      by Parts C/D as if it did (Part C §C.9: "live card data enters
+      only through Part I's verified-source workflow"). Flagged to
+      Satya rather than improvised; he asked for the document itself
+      first. Drafted (docs/DECISIONS.md #103–107): source capture (§I.1),
+      the ingestion bundle format extending the *implemented* card-dict
+      shape, not §C.2.10's illustrative naming (§I.2, #104), extraction
+      discipline binding Claude explicitly — never fill a field from
+      memory, never self-approve a source (§I.0/§I.5, #107), the six-stage
+      CAPTURE→DRAFT→LINT→LINK→REVIEW→PUBLISH pipeline (§I.4), confidence/
+      reviewer_status semantics (§I.5), devaluation via Part D's existing
+      new-`card_version` pattern (§I.6), golden coverage extended to real
+      cards as a hard publish gate (§I.8, #106), and the intended
+      `ingest lint/link/review-queue/publish` CLI shape (§I.9) — spec
+      only, **no ingestion code written yet**. Next: Satya reviews the
+      document; only after sign-off does the tooling in §I.9 get built,
+      one slice at a time like every prior phase.
 - [ ] Phase 6 — frontend (Part F, to be authored)
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
