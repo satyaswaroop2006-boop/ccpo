@@ -5,6 +5,35 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
+## Status as of 2026-08-15 (Phase 5 -- Rs.99 finding approved; all 6 checklist items now resolved)
+
+Satya reviewed the Rs.99 Rewards Redemption Fee proposed reading and
+approved it: the fee does NOT apply to CASHBACK SBI Card. Unlike the
+rent-inclusion approval (#119/#120), this finding has no existing bundle
+entity to attach `_reviewer_status` to -- correctly, since nothing models
+this fee (there's nothing TO approve a field on; the approval is of an
+absence, not a fact about a present field). Recorded directly on the
+finding itself in `_review_findings.checklist_item_6_rs99_redemption_
+fee`. All 6 items in `_review_checklist` are now resolved (4 confirmed/
+approved with evidence, 2 were never source questions) -- see the dated
+entry below.
+
+## Status as of 2026-08-15 (Phase 5 -- Rs.99 redemption-fee question investigated)
+
+Re-examined both cached source documents specifically for the open Rs.99
+"Rewards Redemption Fee" question (not re-fetched -- both were already
+read in full during the earlier findings pass). Found three converging
+points that weren't connected before: the MITC's own fee entry defers to
+"the individual product Terms & Conditions" for applicability; CASHBACK's
+own T&C (unusually thorough on every other fee/timing/forfeiture detail)
+never mentions this fee; and CASHBACK's own FAQ 14 states cashback
+crediting requires no cardholder action at all ("automatically
+credited"), which is incompatible with a fee that by definition attaches
+to an active redemption choice. Recorded as a PROPOSED reading ("does not
+apply") in the bundle's `_review_findings`, explicitly not marked
+approved -- same two-step process as the rent-inclusion finding: Claude
+proposes with reasoning, Satya decides. See the dated entry below.
+
 ## Status as of 2026-08-15 (Phase 5 -- first per-entity reviewer approval recorded)
 
 Satya reviewed the rent-inclusion finding (checklist item 2) and
@@ -2840,3 +2869,98 @@ wording changed from "surfaced during findings pass" to "STILL OPEN,
 pending confirmation" so a future reader scanning the checklist sees
 at a glance which items are settled and which aren't, without needing
 to cross-reference `_review_findings` for status.
+
+---
+
+## 2026-08-15 -- Investigated the Rs.99 Rewards Redemption Fee question
+
+### 121. Three converging points resolve this by inference, not by a
+single sentence that says "CASHBACK is exempt" -- recorded with that
+honesty, not overstated as CONFIRMED
+
+Asked to "confirm the Rs.99 question," re-read both already-cached
+source documents specifically looking for anything connecting to it,
+rather than re-answering from the first pass's surface-level read. Found:
+
+1. The MITC's own fee entry doesn't claim universal applicability -- it
+   says "as specified in the individual product Terms & Conditions,"
+   explicitly pointing at `reward_terms` (CASHBACK's own T&C) to settle
+   the question rather than answering it itself.
+2. `reward_terms` Sec 11 is unusually thorough about cashback mechanics
+   -- forfeiture events (SS11.6), timing (SS11.1(e)), the aggregate cap
+   (SS11.1(j)), the sub-Rs.100 exclusion (SS11.1(s)), even rounding
+   (SS11.1(v)) -- and never once mentions a redemption fee. A document
+   this granular about every OTHER cost-bearing detail of the program is
+   the kind of place a Rs.99 fee would appear if it applied.
+3. `reward_terms` FAQ 14 directly answers "what do I have to do to
+   receive the earned Cashback" with "The Card Cashback will be
+   automatically credited... " -- no cardholder action. A REDEMPTION fee
+   presupposes an active redemption choice (SBI's points-based cards:
+   converting points into one of several catalog options -- merchandise,
+   voucher, or statement credit); CASHBACK has no catalog and no choice
+   to attach a fee to. The one place Sec 11 uses "redeemed" at all
+   (SS11.5(f), the voluntary-closure edge case) carries no fee either.
+
+None of these is a direct "CASHBACK is exempt from the Rs.99 fee"
+sentence -- this is an absence-plus-context inference, same evidentiary
+category as the rent-inclusion finding (#116). Recorded in `_review_
+findings.checklist_item_6_rs99_redemption_fee` as `PROPOSED READING:
+DOES NOT APPLY -- pending Satya's confirmation, not yet approved` --
+deliberately not upgraded to CONFIRMED or marked approved by Claude,
+matching Part I SS I.0/I.5's human-only approval rule exactly as
+applied to #119/#120's rent-inclusion approval. The `_review_checklist`
+entry's inline tag was updated to match (`[PROPOSED READING: DOES NOT
+APPLY -- pending Satya's confirmation, ...]`), same "make the checklist
+itself legible at a glance" pattern #118 established.
+
+### Verification
+
+`bundle_sbi_cashback.json` re-validated as well-formed JSON; `tests/
+test_golden_sbi_cashback.py` re-run (2 passed, 1 skipped, unchanged --
+new `_review_findings` content, no field `bundle_from_dict` reads).
+No `compute/` code touched -- this remains a source-investigation and
+documentation task, no change to the engine or the golden numbers.
+
+---
+
+## 2026-08-15 -- Rs.99 finding approved; approval recorded on the
+finding itself, not on a bundle entity
+
+### 122. Approving an ABSENCE has nowhere to live but the finding record
+-- unlike #119's rent-inclusion approval, there is no field to attach
+`_reviewer_status` to
+
+Satya approved the proposed reading from #121 (the Rs.99 fee doesn't
+apply to CASHBACK). #119 set the precedent that per-entity approvals
+belong on the specific entity they concern, not on the source-level
+flag -- but that precedent assumed an entity EXISTS to attach the
+approval to (there, `thresholds[0]`). Here, correctly, nothing in the
+bundle models this fee at all (the proposed reading was that it doesn't
+apply, so there's no `earning_rules`/`caps`/`surcharges` entry for it to
+be a fact about). The approval is therefore recorded directly on
+`_review_findings.checklist_item_6_rs99_redemption_fee.verdict`
+("APPROVED by Satya 2026-08-15: does NOT apply") rather than invented
+onto some entity that would then misleadingly look like it exists to
+carry a citation. Both `_sources` entries stay `unreviewed` throughout,
+same as before -- neither source is "fully reviewed" as a whole, only
+specific findings drawn from them are.
+
+### 123. All 6 `_review_checklist` items now resolved -- status snapshot,
+not a new decision
+
+For the record: items 1 and 3 confirmed by direct quote (#116); item 2
+approved by Satya, recorded per-entity (#119/#120); items 4-5 were never
+source questions (pre-accepted engine-modelling notes, #116); item 6
+(surfaced during the findings pass itself, not in the original 5)
+approved by Satya, recorded on the finding (#122, this entry). This
+bundle's checklist is fully worked through -- what remains before this
+card_version could even be re-drafted for LINT/LINK/REVIEW/PUBLISH (Part
+I SS I.4) is the surcharge-waiver remodelling (#110) and the exclusions
+engine-support gap (#111/#114), both already logged as separate,
+larger design tasks, not checklist items.
+
+### Verification
+
+`bundle_sbi_cashback.json` re-validated as well-formed JSON; `tests/
+test_golden_sbi_cashback.py` re-run (2 passed, 1 skipped, unchanged).
+No `compute/` code touched.

@@ -174,7 +174,7 @@
     "Confirm forex 3.5% for CASHBACK specifically in the MITC fee table (not a premium-tier exception).",
     "Statement-cycle caps approximated as calendar-month for MVP — flagged, acceptable per A.17.",
     "Sub-100 txn exclusion is txn-mode-only; category-mode value will slightly overstate — acceptable, flagged.",
-    "STILL OPEN, pending confirmation: MITC p.31's 'Rewards Redemption Fee: Rs.99 ... Statement Credit ...' -- does this apply to CASHBACK's automatic monthly cashback posting, or only to points-cards' customer-initiated redemption-to-statement-credit? Not modelled anywhere in this bundle; if it applies, NACV is understated by ~Rs.99/instance."
+    "[APPROVED by Satya 2026-08-15 -- see _review_findings.checklist_item_6_rs99_redemption_fee] MITC p.31's 'Rewards Redemption Fee: Rs.99 ... Statement Credit ...' -- does NOT apply to CASHBACK's automatic monthly cashback posting (no fee modelled, correctly)."
   ],
 
   "_review_findings": {
@@ -202,6 +202,13 @@
       "cap_amounts_scope_overflow": "Rs.2,000 online / Rs.2,000 offline / Rs.4,000 aggregate (scope=card), overflow=zero for all three -- all confirmed verbatim against reward_terms Sec 11.1(j) ('will not accrue any cashback till [next cycle]').",
       "fuel_surcharge_waiver": "Corroborated by BOTH sources independently agreeing (reward_terms Sec 13.1 AND mitc's own Surcharge table): 1% waiver, Rs.500-3,000 per txn, Rs.100/cycle cap -- highest confidence per Part I SS I.5's own weighting (two independent primary-ish sources agreeing)."
     },
-    "open_question_not_previously_flagged": "mitc p.31: 'Rewards Redemption Fee: Rs.99. Applicable only on Physical products, Statement Credit & on Vouchers...' -- CASHBACK's payout IS a statement credit, but reward_terms Sec 11.1(a) describes it as automatic ('directly credited... within two working days'), not a customer-initiated redemption. Genuinely ambiguous from text alone whether the Rs.99 fee applies to CASHBACK's automatic monthly credit or only to points-cards' active redemption flow. Not modelled in this bundle either way -- added to _review_checklist above rather than guessed."
+    "checklist_item_6_rs99_redemption_fee": {
+      "verdict": "APPROVED by Satya 2026-08-15: does NOT apply to CASHBACK",
+      "quotes": [
+        "mitc p.31: \"Rewards Redemption Fee: Rs.99. Applicable only on Physical products, Statement Credit & on Vouchers that are sent physically AS SPECIFIED IN THE INDIVIDUAL PRODUCT TERMS & CONDITIONS, for all cards except AURUM.\"",
+        "reward_terms FAQ 14: \"What do I have to do to receive the earned Cashback? Ans: The Card Cashback will be automatically credited to your SBI Card account and will reflect in your monthly statement.\""
+      ],
+      "reasoning": "Three converging points, not one direct quote: (1) the MITC's own fee entry explicitly defers to 'the individual product Terms & Conditions' for applicability -- i.e. it points AT reward_terms Sec 11 to settle this, not at itself. (2) Sec 11 is unusually thorough (forfeiture events, timing, caps, minimum-txn threshold, rounding) yet never once mentions this fee, despite being exactly the kind of clause it would state if it applied. (3) FAQ 14 directly answers 'what do I have to do to receive cashback' with 'nothing -- automatic' -- a REDEMPTION fee presupposes an active redemption choice (typically: converting points into one of several catalog options -- merchandise, voucher, or statement credit), which CASHBACK's mechanism doesn't have at all; there is no catalog, no choice, nothing to redeem FROM. Sec 11.5(f) does use 'redeemed' once, for the narrow voluntary-closure edge case, but attaches no fee to it either. Net: the Rs.99 fee reads as aimed at SBI's POINTS-based cards (which the same MITC page separately notes have a 24-month Reward Point expiry and a redemption catalog), not at CASHBACK's direct percentage rebate. This was an absence-plus-context inference, not a single sentence saying 'CASHBACK is exempt' -- Claude proposed it, Satya reviewed and approved. No entity in this bundle models this fee (correctly, since it doesn't apply) -- the approval is recorded here rather than on a bundle field, since there's no field to attach it to."
+    }
   }
 }
