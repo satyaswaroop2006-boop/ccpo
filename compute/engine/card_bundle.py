@@ -54,30 +54,50 @@ class CardRuleBundle:
     surcharges: tuple[Surcharge, ...]
 
 
-def _selector_from_dict(d: dict) -> Selector:
+_SELECTOR_TUPLE_FIELDS = ("categories", "channels", "merchant_groups", "merchants", "networks")
+_SELECTOR_INT_TUPLE_FIELDS = ("mcc_include", "mcc_exclude")
+_SELECTOR_SCALAR_FIELDS = ("geography", "date_from", "date_to")
+_SELECTOR_DECIMAL_FIELDS = ("txn_min", "txn_max")
+
+
+def _selector_kwargs_from_dict(d: dict) -> dict:
+    """Populates EVERY Part C SS C.2.1 selector field present in the raw
+    dict, not just the four (categories/channels/merchant_groups/
+    geography) the engine's matching logic (`match.selector_matches`,
+    `eligibility._selector_matches`) actually reads. This is deliberate:
+    `match._validate_rule` and `eligibility._validate_exclusion` already
+    exist specifically to raise when a selector uses an unsupported field
+    (mcc_include, txn_max, etc.) -- but only if that field actually reaches
+    the dataclass. Before this fix, both loader functions silently dropped
+    those fields during dict->dataclass translation, so the validators
+    always saw an all-supported (or all-None) selector and never fired --
+    a real bug, not by design: an ingestion bundle using mcc_include on an
+    exclusion would silently produce an all-None ExclusionSelector, which
+    `eligibility._selector_matches` treats as MATCHES EVERYTHING, rather
+    than the loud raise the validators were built to produce. Discovered
+    while building `compute/ingest`'s lint tool; see docs/DECISIONS.md."""
     kwargs = {}
-    if d.get("categories") is not None:
-        kwargs["categories"] = tuple(d["categories"])
-    if d.get("channels") is not None:
-        kwargs["channels"] = tuple(d["channels"])
-    if d.get("merchant_groups") is not None:
-        kwargs["merchant_groups"] = tuple(d["merchant_groups"])
-    if d.get("geography") is not None:
-        kwargs["geography"] = d["geography"]
-    return Selector(**kwargs)
+    for field in _SELECTOR_TUPLE_FIELDS:
+        if d.get(field) is not None:
+            kwargs[field] = tuple(d[field])
+    for field in _SELECTOR_INT_TUPLE_FIELDS:
+        if d.get(field) is not None:
+            kwargs[field] = tuple(d[field])
+    for field in _SELECTOR_SCALAR_FIELDS:
+        if d.get(field) is not None:
+            kwargs[field] = d[field]
+    for field in _SELECTOR_DECIMAL_FIELDS:
+        if d.get(field) is not None:
+            kwargs[field] = Decimal(str(d[field]))
+    return kwargs
+
+
+def _selector_from_dict(d: dict) -> Selector:
+    return Selector(**_selector_kwargs_from_dict(d))
 
 
 def _exclusion_selector_from_dict(d: dict) -> ExclusionSelector:
-    kwargs = {}
-    if d.get("categories") is not None:
-        kwargs["categories"] = tuple(d["categories"])
-    if d.get("channels") is not None:
-        kwargs["channels"] = tuple(d["channels"])
-    if d.get("merchant_groups") is not None:
-        kwargs["merchant_groups"] = tuple(d["merchant_groups"])
-    if d.get("geography") is not None:
-        kwargs["geography"] = d["geography"]
-    return ExclusionSelector(**kwargs)
+    return ExclusionSelector(**_selector_kwargs_from_dict(d))
 
 
 def _accrual_from_dict(d: dict, currency: str) -> Accrual:

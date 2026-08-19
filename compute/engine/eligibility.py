@@ -73,7 +73,12 @@ class EligibleSpend:
     waiver: tuple[SpendSegment, ...]
 
 
-def _validate_exclusion(exclusion: Exclusion) -> None:
+def validate_exclusion(exclusion: Exclusion) -> None:
+    """Public (was module-private) -- same reason as `match.validate_
+    rule`: `compute/ingest`'s lint tool calls this per-exclusion so it
+    can collect every issue instead of stopping at whichever exclusion
+    `apply_eligibility`'s own loop hits first. `apply_eligibility` still
+    calls it internally, unchanged."""
     unknown = set(exclusion.excluded_from) - VALID_EXCLUDED_FROM
     if unknown:
         raise ValueError(
@@ -105,7 +110,7 @@ def _selector_matches(selector: ExclusionSelector, segment: SpendSegment) -> boo
 
 def apply_eligibility(normalised: NormalisedSpend, exclusions: Sequence[Exclusion]) -> EligibleSpend:
     for exclusion in exclusions:
-        _validate_exclusion(exclusion)
+        validate_exclusion(exclusion)
 
     reward: list[SpendSegment] = []
     milestone: list[SpendSegment] = []

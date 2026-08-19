@@ -51,12 +51,14 @@ from typing import Sequence
 
 from engine.normalise import NormalisedSpend, SpendSegment
 
-_ALL_SELECTOR_FIELDS = (
+ALL_SELECTOR_FIELDS = (
     "categories", "channels", "merchant_groups", "merchants", "mcc_include",
     "mcc_exclude", "networks", "geography", "txn_min", "txn_max", "date_from", "date_to",
 )
-_SUPPORTED_SELECTOR_FIELDS = frozenset({"categories", "channels", "merchant_groups", "geography"})
-_UNSUPPORTED_SELECTOR_FIELDS = tuple(f for f in _ALL_SELECTOR_FIELDS if f not in _SUPPORTED_SELECTOR_FIELDS)
+SUPPORTED_SELECTOR_FIELDS = frozenset({"categories", "channels", "merchant_groups", "geography"})
+# Public (was module-private) -- costs.py's surcharge validator needs the
+# same list, and duplicating it risked the two ever drifting apart.
+UNSUPPORTED_SELECTOR_FIELDS = tuple(f for f in ALL_SELECTOR_FIELDS if f not in SUPPORTED_SELECTOR_FIELDS)
 
 
 @dataclass(frozen=True)
@@ -102,12 +104,16 @@ class RuleBinding:
 
 
 def _specificity(selector: Selector) -> int:
-    return sum(1 for field in _ALL_SELECTOR_FIELDS if getattr(selector, field) is not None)
+    return sum(1 for field in ALL_SELECTOR_FIELDS if getattr(selector, field) is not None)
 
 
-def _validate_rule(rule: EarningRule) -> None:
+def validate_rule(rule: EarningRule) -> None:
+    """Public (was module-private) -- `compute/ingest`'s lint tool calls
+    this per-rule directly so it can collect every issue in one bundle
+    instead of stopping at whichever rule `match()`'s own loop hits
+    first. `match()` still calls it internally, unchanged."""
     used_unsupported = [
-        field for field in _UNSUPPORTED_SELECTOR_FIELDS if getattr(rule.selector, field) is not None
+        field for field in UNSUPPORTED_SELECTOR_FIELDS if getattr(rule.selector, field) is not None
     ]
     if used_unsupported:
         raise ValueError(
@@ -152,7 +158,7 @@ def match_segment(
     active_rule_keys: frozenset[str] = frozenset(),
 ) -> tuple[RuleBinding, ...]:
     for rule in earning_rules:
-        _validate_rule(rule)
+        validate_rule(rule)
 
     eligible = [
         r for r in earning_rules

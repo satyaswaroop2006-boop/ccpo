@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Sequence
 
-from engine.match import Selector, selector_matches
+from engine.match import Selector, UNSUPPORTED_SELECTOR_FIELDS, selector_matches
 from engine.normalise import SpendSegment
 from engine.thresholds import ThresholdEvent
 
@@ -79,9 +79,30 @@ def international_spend_total(segments: Sequence[SpendSegment]) -> Decimal:
     return sum((s.amount for s in segments if s.geography == "international"), Decimal("0"))
 
 
+def validate_surcharge(surcharge: Surcharge) -> None:
+    """Mirrors `match.validate_rule`/`eligibility.validate_exclusion` --
+    a surcharge's selector is match.py's own `Selector` type (SS49), but
+    unlike earning rules and exclusions, nothing ever validated it against
+    `UNSUPPORTED_SELECTOR_FIELDS`. A genuinely separate gap from the
+    card_bundle.py loader bug those two validators' own fix uncovered --
+    surcharges never had a validator to fail silently in the first place.
+    Public from the start (not module-private then promoted) -- built
+    knowing `compute/ingest`'s lint tool needs to call it per-item. See
+    docs/DECISIONS.md."""
+    used_unsupported = [
+        field for field in UNSUPPORTED_SELECTOR_FIELDS if getattr(surcharge.selector, field) is not None
+    ]
+    if used_unsupported:
+        raise ValueError(
+            f"surcharge {surcharge.key!r} selector uses field(s) {used_unsupported} that "
+            "category-mode spend segments cannot be matched against"
+        )
+
+
 def surcharge_cost(segments: Sequence[SpendSegment], surcharges: Sequence[Surcharge]) -> Decimal:
     total = Decimal("0")
     for surcharge in surcharges:
+        validate_surcharge(surcharge)
         matching_spend = sum(
             (s.amount for s in segments if selector_matches(surcharge.selector, s)), Decimal("0")
         )
