@@ -5,6 +5,32 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
+## Status as of 2026-08-15 (Phase 5 -- `ingest lint` built, Part I SS I.9's first tool)
+
+Started building Part I SS I.9's tooling with `ingest lint` (structural
+validation, no database access -- SS I.11's own stated build order:
+loader/dataclass, then LINT, then LINK/PUBLISH). Found and fixed a real
+bug on the way: `engine/card_bundle.py`'s selector loaders silently
+dropped every Part C SS C.2.1 selector field except the four the engine
+actually matches on, which meant the engine's OWN existing guards against
+unsupported fields (`match.py`, `eligibility.py`) never actually fired --
+not a design gap, a loader bug undermining validators that were already
+built correctly. Fixed at the root (the loader), not worked around;
+surcharges turned out to have no such guard AT ALL (a second, separate
+gap), so one was added. All three validators promoted to public so the
+new lint tool can call them per-item and report every issue in one run,
+not just the first. Running the finished tool against
+`bundle_sbi_cashback.json` surfaced one genuinely new finding no prior
+manual review pass had caught (the currency/route carry no source
+citation at all) alongside mechanically confirming the two exclusions
+issues that were previously only hand-documented. `compute/ingest/`'s
+own bundle-loading layer also had to reconcile a real spec-vs-practice
+divergence: Part I SS I.2 specifies `source_refs` (a list); the one real
+bundle uses `_source` (a string) -- both are now accepted rather than
+forcing a fourth edit of an already-approved artifact. 294/294 tests
+green + 1 skipped (16 new for the lint tool, 6 new engine-hardening
+regression tests). See the dated entry below for full detail.
+
 ## Status as of 2026-08-15 (Phase 5 -- Rs.99 finding approved; all 6 checklist items now resolved)
 
 Satya reviewed the Rs.99 Rewards Redemption Fee proposed reading and
@@ -2964,3 +2990,154 @@ larger design tasks, not checklist items.
 `bundle_sbi_cashback.json` re-validated as well-formed JSON; `tests/
 test_golden_sbi_cashback.py` re-run (2 passed, 1 skipped, unchanged).
 No `compute/` code touched.
+
+---
+
+## 2026-08-15 -- `ingest lint` built (Part I SS I.9's first tool)
+
+### 124. `card_bundle.py`'s selector loaders were silently defeating the
+engine's own already-correct validators -- a real bug, found and fixed
+at the root, not worked around
+
+While designing the lint tool's "engine compatibility" check, went to
+reuse `match.py`'s existing guard against unsupported selector fields
+rather than re-implement it. Found `match._validate_rule` (now public,
+see #126) already existed, already correctly enumerated every C.2.1
+selector field, and already raised on an unsupported one -- but never
+actually fired for any ingested bundle, because `card_bundle.py`'s
+`_selector_from_dict`/`_exclusion_selector_from_dict` only ever
+populated `categories`/`channels`/`merchant_groups`/`geography` on the
+dataclass, silently discarding `mcc_include`/`mcc_exclude`/`networks`/
+`merchants`/`txn_min`/`txn_max`/`date_from`/`date_to` during dict->
+dataclass translation. By the time the validator ran, those fields were
+already `None` -- nothing to complain about. This is exactly the
+`_exclusion_selector_from_dict` danger already logged as #111
+("silently drops mcc_include/txn_max... ExclusionSelector matches
+EVERYTHING") -- but #111 framed it as an eligibility.py-specific issue;
+building this tool revealed it's a `card_bundle.py` loader bug affecting
+earning_rules and surcharges identically, and that the fix belongs in
+ONE place (the loader), not three (one workaround per consumer). Fixed
+`_selector_kwargs_from_dict` (a new shared helper both `_selector_from_
+dict`/`_exclusion_selector_from_dict` now call) to populate every C.2.1
+field. Zero behaviour change for any existing fixture (no synthetic
+card, and no already-reviewed part of `bundle_sbi_cashback.json`'s
+`earning_rules`/`surcharges`, ever sets these fields) -- confirmed by
+the full suite staying green before writing a single new test.
+
+### 125. Surcharges had no validator AT ALL -- a second, separate gap
+from #124, not the same bug wearing a different hat
+
+Checked whether `costs.py` had an equivalent guard before assuming #124
+covered it. It didn't -- `surcharge_cost` calls `selector_matches`
+directly with no validation step anywhere, for either of the two reasons
+`match.py`/`eligibility.py` have one (loader silently dropping fields,
+OR no check written at all). This is the "no check written at all" case.
+Added `costs.validate_surcharge`, mirroring `match.validate_rule`
+exactly, called from `surcharge_cost`'s own loop. Built public from the
+start (not private-then-promoted like the other two, #126) since it was
+written already knowing the lint tool needs to call it per-item.
+
+### 126. `validate_rule`/`validate_exclusion` promoted from module-private
+to public, specifically so the lint tool reports EVERY bad rule/
+exclusion in one run, not just the first
+
+First version of the lint tool's engine-compatibility check ran the
+bundle through `match()`/`apply_eligibility()` directly and caught
+whatever `ValueError` came out. Tested against the real bundle (two bad
+exclusions: `cashback_mcc_exclusions` using `mcc_include`, `min_txn_100`
+using `txn_max`) and found only ONE reported -- `apply_eligibility`'s
+own validation loop raises on the FIRST bad exclusion and stops, never
+reaching the second. A drafter using this tool to fix a bundle would
+have to fix-and-rerun repeatedly to discover problems one at a time,
+exactly the friction a lint tool exists to remove. Fixed by promoting
+`match._validate_rule` -> `match.validate_rule` and `eligibility.
+_validate_exclusion` -> `eligibility.validate_exclusion` (same rename
+pattern as #15/#92/etc.: private helper promoted when a second, real
+caller needs it directly) and having the lint tool call each one
+PER ITEM, collecting every issue instead of stopping at the first.
+Re-ran against the real bundle: both exclusions now correctly reported
+in one pass. `match()`/`apply_eligibility()` themselves are unchanged --
+they still call the (now-public) functions internally exactly as before.
+
+### 127. `compute/ingest/` bundle loader reconciles Part I's own spec
+against how the one real bundle actually turned out -- both spellings
+accepted, not a forced fourth edit
+
+Part I SS I.2's worked example specifies `"source_refs": [...]` (a list)
+per entity and `"sources": {...}` at the top level. `bundle_sbi_
+cashback.json` -- drafted, reviewed, and partly approved across three
+prior sessions, entirely before this tool existed -- independently
+settled on `"_source": "..."` (singular string, underscore-prefixed,
+matching this repo's `_note`/`_engine_compatibility_note` convention)
+and `"_sources": {...}`. `ingest.bundle.source_refs`/`declared_sources`
+accept both spellings (`_source` treated as a one-element `source_refs`)
+rather than forcing a fourth edit of an artifact that's already been
+through real human review to match a spec detail that turned out not to
+match practice. Part I SS I.2 itself should be updated to document this
+as the actual convention -- flagged here, not yet done (a docs-only
+follow-up, doesn't block this tool).
+
+### 128. Deliberately does NOT implement Part C SS C.11's original four
+structural checks -- confirmed absent from the whole repo before
+claiming anything about them, and the report says so out loud
+
+Before writing `lint.py`, searched the entire `compute/` tree for
+selector-overlap linting, threshold-payload depth checking, cap-scope
+resolution, and currency/route completeness -- none exist anywhere,
+confirmed by search, not assumed (Part C's own SS C.11 prose is the only
+place these are described). Building all four from scratch was out of
+scope for "start the tooling" -- each is a real, separate design task
+(e.g. selector-overlap linting needs to reason about priority+specificity
+ties across an entire rule set, not validate one object at a time the
+way this pass's checks do). `LintReport.checks_not_implemented` states
+this explicitly, and the CLI prints it on every run, unconditionally --
+a bundle passing `ingest lint` is NOT the same claim as "passes Part C
+SS C.11," and the tool says so rather than implying broader coverage
+than it has.
+
+### 129. Running the finished tool against the real bundle found something
+new -- the currency/route carry no source citation at all
+
+Neither `currencies[0]` (`cashback_inr`) nor its one route
+(`statement_credit`) has ever carried a `_source`/`source_refs` --
+missed across every one of this bundle's three prior manual review
+passes (items 1-6 of `_review_checklist`). Added as item 7, with an
+open question rather than a silent fix: is a 1:1 statement-credit ratio
+(cashback denominated directly in rupees, `v=1` by construction) the
+kind of fact Part I SS I.0 actually means to require sourcing for, or
+is "this currency literally IS rupees" self-evident enough not to need
+one the way a transfer ratio would? Either answer is defensible; picking
+one silently would be exactly the guess SS I.0 exists to prevent. This
+finding is itself the argument for building the tool at all -- a human
+(or Claude) reading the bundle top-to-bottom can miss an entity; a
+per-entity mechanical check structurally cannot.
+
+### Verification
+
+`compute/ingest/` (new package: `bundle.py`, `lint.py`, `cli.py`,
+`__main__.py`) plus `tests/test_ingest_lint.py` (16 tests) and `tests/
+test_card_bundle.py` (6 tests, up from 5 -- the surcharge validator
+regression test added this pass). Lint tool tested two ways: fabricated
+minimal bundles isolate one behaviour at a time (missing citation,
+undeclared source key, bad selector field, translation failure, the
+"reports ALL bad exclusions not just the first" fix), and the real
+`bundle_sbi_cashback.json` is run through the whole tool end-to-end,
+asserting the EXACT 4 findings (2 provenance, 2 engine-compatibility) --
+a lock-in test, not just a smoke test: if this tool ever disagrees with
+what prior manual review found by hand, that's a signal worth
+investigating, not noise to relax the assertion around. CLI smoke-tested
+directly (`python -m ingest lint ingestion/bundle_sbi_cashback.json`,
+exit code 1, all 4 issues printed with the not-implemented list) before
+writing the formal `capsys`-based CLI tests. Full suite: 294/294 green
++ 1 skipped (278 prior + 16 lint tests, replacing the 5 test_card_
+bundle.py tests with 6 after the surcharge regression test was added).
+
+Only `ingest lint` is built. `ingest link`/`ingest review-queue`/
+`ingest publish` (Part I SS I.9's remaining three) are not registered
+as CLI subcommands at all yet -- deliberately, not stubbed with a fake
+"not implemented" message, since that would look like partial coverage
+of something that doesn't exist. Next slice, whenever it comes: `ingest
+link` (writes `sources`/card rows/`source_links` to Postgres, `status=
+'draft'`) -- the first `compute/` code in this repo that touches the
+catalog tables via anything other than `seeds/seed.py`'s synthetic
+fixtures.

@@ -40,7 +40,7 @@
       "routes": [
         { "key": "statement_credit", "route_type": "statement_credit", "ratio": 1.0, "friction_default": 1.0 }
       ],
-      "_note": "Direct statement-credit cashback. v = 1. No redemption ambiguity."
+      "_note": "Direct statement-credit cashback. v = 1. No redemption ambiguity. FLAGGED by `ingest lint` (compute/ingest): neither this currency nor its route carries a _source/source_refs citation -- see _review_checklist item 7."
     }
   ],
 
@@ -174,7 +174,8 @@
     "Confirm forex 3.5% for CASHBACK specifically in the MITC fee table (not a premium-tier exception).",
     "Statement-cycle caps approximated as calendar-month for MVP — flagged, acceptable per A.17.",
     "Sub-100 txn exclusion is txn-mode-only; category-mode value will slightly overstate — acceptable, flagged.",
-    "[APPROVED by Satya 2026-08-15 -- see _review_findings.checklist_item_6_rs99_redemption_fee] MITC p.31's 'Rewards Redemption Fee: Rs.99 ... Statement Credit ...' -- does NOT apply to CASHBACK's automatic monthly cashback posting (no fee modelled, correctly)."
+    "[APPROVED by Satya 2026-08-15 -- see _review_findings.checklist_item_6_rs99_redemption_fee] MITC p.31's 'Rewards Redemption Fee: Rs.99 ... Statement Credit ...' -- does NOT apply to CASHBACK's automatic monthly cashback posting (no fee modelled, correctly).",
+    "NEW, found by compute/ingest's lint tool (not by manual review): currencies[0] (cashback_inr) and its route (statement_credit) carry no source citation at all. The 1:1 statement-credit ratio is arguably self-evident (cashback IS rupees, v=1 by construction, not something that needs sourcing the way a transfer ratio would) -- but Part I SS I.0 draws no exception for 'obvious' facts. Needs either a source_refs pointing at the reward_terms/mitc citation that establishes it's a direct rupee-denominated cashback (not points needing a redemption rate), or an explicit decision that self-evident currency mechanics are exempt from SS I.0 (a Part I amendment, not a per-bundle judgment call)."
   ],
 
   "_review_findings": {
@@ -209,6 +210,11 @@
         "reward_terms FAQ 14: \"What do I have to do to receive the earned Cashback? Ans: The Card Cashback will be automatically credited to your SBI Card account and will reflect in your monthly statement.\""
       ],
       "reasoning": "Three converging points, not one direct quote: (1) the MITC's own fee entry explicitly defers to 'the individual product Terms & Conditions' for applicability -- i.e. it points AT reward_terms Sec 11 to settle this, not at itself. (2) Sec 11 is unusually thorough (forfeiture events, timing, caps, minimum-txn threshold, rounding) yet never once mentions this fee, despite being exactly the kind of clause it would state if it applied. (3) FAQ 14 directly answers 'what do I have to do to receive cashback' with 'nothing -- automatic' -- a REDEMPTION fee presupposes an active redemption choice (typically: converting points into one of several catalog options -- merchandise, voucher, or statement credit), which CASHBACK's mechanism doesn't have at all; there is no catalog, no choice, nothing to redeem FROM. Sec 11.5(f) does use 'redeemed' once, for the narrow voluntary-closure edge case, but attaches no fee to it either. Net: the Rs.99 fee reads as aimed at SBI's POINTS-based cards (which the same MITC page separately notes have a 24-month Reward Point expiry and a redemption catalog), not at CASHBACK's direct percentage rebate. This was an absence-plus-context inference, not a single sentence saying 'CASHBACK is exempt' -- Claude proposed it, Satya reviewed and approved. No entity in this bundle models this fee (correctly, since it doesn't apply) -- the approval is recorded here rather than on a bundle field, since there's no field to attach it to."
+    },
+    "checklist_item_7_currency_route_provenance": {
+      "verdict": "NEW -- found mechanically by compute/ingest's `ingest lint`, not by any prior manual review pass, pending Satya's decision",
+      "finding": "`ingest lint ingestion/bundle_sbi_cashback.json` flags currencies[0] (cashback_inr) and currencies[0].routes[0] (statement_credit) as having no source citation at all -- the FIRST provenance gap this bundle's own repeated manual review (items 1-6 above) never caught. Confirms the value of building the tool: every earlier pass was a human (or Claude) reading the bundle top-to-bottom and could miss an entity; a mechanical per-entity check can't.",
+      "open_question": "Is a 1:1 statement-credit ratio (cashback denominated directly in rupees, v=1 by construction) the kind of fact Part I SS I.0 actually means to require sourcing for, or is 'this currency literally IS rupees' self-evident enough not to need a citation the way a transfer ratio or a reward rate does? Not resolved here -- either answer is defensible, and picking one silently would be exactly the kind of guess SS I.0 exists to prevent."
     }
   }
 }

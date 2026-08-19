@@ -237,25 +237,54 @@ decision in `docs/DECISIONS.md` (create on first use).
       tests green.
 
 Phase 4's module list (Part E §E.0) is now fully built and wired.
-- [ ] Phase 5 — real card ingestion (Part I workflow).
-      **Blocked on sign-off, by design**: `docs/Part_I_Ingestion_
-      Workflow.md` didn't exist anywhere in the repo — only referenced
-      by Parts C/D as if it did (Part C §C.9: "live card data enters
-      only through Part I's verified-source workflow"). Flagged to
-      Satya rather than improvised; he asked for the document itself
-      first. Drafted (docs/DECISIONS.md #103–107): source capture (§I.1),
-      the ingestion bundle format extending the *implemented* card-dict
-      shape, not §C.2.10's illustrative naming (§I.2, #104), extraction
-      discipline binding Claude explicitly — never fill a field from
-      memory, never self-approve a source (§I.0/§I.5, #107), the six-stage
+- [~] Phase 5 — real card ingestion (Part I workflow), in progress.
+      **Part I drafted** (docs/DECISIONS.md #103–107): `docs/Part_I_
+      Ingestion_Workflow.md` didn't exist anywhere in the repo — only
+      referenced by Parts C/D as if it did. Flagged to Satya rather than
+      improvised; he asked for the document itself first. Covers: source
+      capture (§I.1), the ingestion bundle format extending the
+      *implemented* card-dict shape (§I.2, #104), extraction discipline
+      binding Claude explicitly — never fill a field from memory, never
+      self-approve a source (§I.0/§I.5, #107), the six-stage
       CAPTURE→DRAFT→LINT→LINK→REVIEW→PUBLISH pipeline (§I.4), confidence/
       reviewer_status semantics (§I.5), devaluation via Part D's existing
       new-`card_version` pattern (§I.6), golden coverage extended to real
       cards as a hard publish gate (§I.8, #106), and the intended
-      `ingest lint/link/review-queue/publish` CLI shape (§I.9) — spec
-      only, **no ingestion code written yet**. Next: Satya reviews the
-      document; only after sign-off does the tooling in §I.9 get built,
-      one slice at a time like every prior phase.
+      `ingest lint/link/review-queue/publish` CLI shape (§I.9).
+      **First real-card pipeline validation done**: Satya hand-drafted
+      `compute/ingestion/bundle_sbi_cashback.json` (CASHBACK SBI Card,
+      from the e-kit T&C + MITC) before any tooling existed — a
+      deliberate validation exercise, not a bulk load. Wired against the
+      engine directly, verified against a golden with two scenarios
+      (steady-state annual passes exactly; the PDF's own worked example
+      is a permanent, reasoned skip — EMI exclusion has no representation
+      anywhere in the schema, #112). Both source PDFs fetched and read in
+      full; all 6 items in the bundle's `_review_checklist` resolved —
+      4 confirmed/approved by Satya with exact quotes, 2 were never
+      source questions (#115–123).
+      **`ingest lint` built — Part I §I.9's first tool** (#124–129):
+      structural validation, no database access. Found and fixed a real
+      bug on the way, not a design gap: `card_bundle.py`'s selector
+      loaders silently dropped every C.2.1 selector field except the four
+      the engine matches on, so the engine's own already-correct guards
+      (`match.py`, `eligibility.py`) against unsupported fields
+      (`mcc_include`, `txn_max`, etc.) never actually fired. Fixed at the
+      loader (the root cause), not worked around three separate times;
+      surcharges had no such guard *at all*, so one was added
+      (`costs.validate_surcharge`). All three validators promoted to
+      public so the lint tool reports *every* bad rule/exclusion in one
+      run, not just the first one hit. Running the finished tool against
+      the real SBI bundle found something new no manual review pass had
+      caught — the currency/route carry no source citation at all — the
+      argument for building the tool in the first place. `compute/ingest/`
+      also had to reconcile a real spec-vs-practice gap: Part I §I.2
+      specifies `source_refs` (a list); the one real bundle independently
+      settled on `_source` (a string) — both now accepted rather than
+      forcing a fourth edit of an already-approved artifact. 294/294
+      tests green + 1 skipped. **Not built yet**: `ingest link`/`review-
+      queue`/`publish` (touch Postgres) — no CLI stubs registered for
+      them, since that would look like partial coverage of something
+      that doesn't exist.
 - [ ] Phase 6 — frontend (Part F, to be authored)
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
