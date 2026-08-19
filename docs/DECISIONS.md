@@ -5,6 +5,38 @@ engine-level judgment call the spec doesn't pin down, it's logged here
 instead of silently picked. New assumption-registry defaults are flagged
 here too, for Satya's sign-off.
 
+## Status as of 2026-08-15 (Phase 5 -- first per-entity reviewer approval recorded)
+
+Satya reviewed the rent-inclusion finding (checklist item 2) and
+approved it. Recording that approval surfaced a real gap in the bundle
+file format: `_sources.*.reviewer_status` is per-SOURCE, but the MITC
+source backs two independent facts (the fee-waiver threshold, now
+approved, and the still-open Rs.99 question) that don't share one
+approval state -- exactly the granularity Part D's real `source_links`
+table already has (per `(source, entity)`, never per bare source) and
+the bundle file's shortcut didn't. Fixed by adding `_reviewer_status`/
+`_reviewer_note` directly on the approved entity (`thresholds[0]`)
+rather than flipping the source-level flag, which would have overclaimed
+approval onto the unresolved Rs.99 question. `_sources.mitc.
+reviewer_status` stays `unreviewed`. See the dated entry below.
+
+## Status as of 2026-08-15 (Phase 5 -- source checklist reviewed against primary documents)
+
+Fetched and read both cited sources in full (`reward_terms` -- the 47pp
+e-kit T&C; `mitc` -- the 57pp MITC) and checked every item in the
+bundle's `_review_checklist` against the actual text, plus cross-checked
+everything else in the bundle opportunistically now that both documents
+were in hand. Checklist items 1-3 confirmed (exact quotes recorded in the
+bundle's new `_review_findings` block); items 4-5 were never source
+questions to begin with. One NEW open question surfaced that wasn't on
+the original checklist (MITC's Rs.99 "Rewards Redemption Fee" --
+possibly applicable to CASHBACK's statement credit, possibly not,
+genuinely ambiguous from the text). `reviewer_status` on both
+`_sources` entries left `unreviewed` throughout -- per Part I SS I.0/I.5
+(not yet signed off, but held to anyway), gathering and presenting
+evidence is not the same act as approving it, and approval stays
+human-only. See the dated entry below for full detail.
+
 ## Status as of 2026-08-15 (Phase 5 -- first real-card pipeline validation)
 
 Satya hand-drafted the first real ingestion bundle (`compute/ingestion/
@@ -2664,3 +2696,147 @@ construction. Re-ran the full suite after both file edits: same 273/273
 (online Rs24,000.00, offline Rs2,400.00, steady-state Rs26,400.00,
 Year-1 Rs25,221.18) -- the rename moved names, not values, exactly as
 intended.
+
+---
+
+## 2026-08-15 -- Reviewed the bundle's _review_checklist against both primary sources
+
+### 115. Fetched and read both full source PDFs rather than answering the
+checklist from search snippets or partial extraction
+
+`WebFetch` on both PDF URLs returned unparseable binary/encoded content
+the first time (a real, worth-recording gap: the tool's HTML->markdown
+path doesn't handle these particular PDFs) -- the fallback that worked
+was reading the tool's own saved local copy directly with the Read
+tool's native PDF support, which returned full per-page text for both
+the 47pp e-kit T&C and the 57pp MITC. Read both in full before answering
+anything, not just grepped for the 5 checklist phrases -- this is what
+surfaced the Rs.99 "Rewards Redemption Fee" question (#117) that
+wouldn't have come up from a targeted search.
+
+### 116. Checklist items 1 and 3 confirmed by direct quote; item 2 resolved
+by absence of a stated exclusion, not by a direct quote -- the
+distinction is recorded, not glossed over
+
+Item 1 (online/offline channel mapping) and item 3 (3.5% forex, no
+premium-tier exception) both have a sentence in the source that answers
+the question directly -- recorded verbatim in the bundle's new
+`_review_findings` block. Item 2 (does rent count toward the Rs.2L fee-
+waiver) does NOT have a sentence that says so -- the MITC's waiver
+clause ("Waived off on annual spends of Rs.2 Lakh or more") simply
+never attaches an exclusion, while the reward-side MCC exclusions live
+in a separately-scoped section of a DIFFERENT document (the T&C, not
+the MITC) that explicitly frames itself as reward-only ("Cashback shall
+not be earned for..."). The bundle's original `_note` reading is
+supported by this absence, not proven by a positive statement -- recorded
+as "resolved in the bundle's favour, not airtight" rather than upgraded
+to "confirmed," so Satya's review pass knows exactly how much weight
+this finding can bear.
+
+### 117. New open question surfaced beyond the original 5-item checklist,
+added to it rather than silently resolved either way
+
+MITC p.31's "Rewards Redemption Fee: Rs.99 ... Applicable only on
+Physical products, Statement Credit & on Vouchers..." names "Statement
+Credit" as a fee-bearing redemption type -- CASHBACK SBI Card's own
+payout mechanism IS a statement credit. But `reward_terms` SS11.1(a)
+describes that credit as automatic ("directly credited... within two
+working days of statement generation"), with no customer action
+described anywhere as a "redemption." Genuinely ambiguous from the text
+which reading is correct (does the Rs.99 fee apply to CASHBACK's
+automatic posting, or only to a different, points-based card's active
+redeem-to-statement-credit flow). Per Part I SS I.3's discipline
+("ambiguous wording is flagged, not resolved by best guess"), added as
+a 6th `_review_checklist` item rather than either assuming it applies
+(understating NACV by nothing, i.e. treating it as inapplicable without
+evidence) or modelling a Rs.99 cost with no textual basis for when it
+would fire.
+
+### 118. Findings written into the bundle file itself (`_review_findings`),
+not left only in this log or in chat -- but `reviewer_status` on both
+`_sources` entries stays `unreviewed`
+
+Same posture as #114's `_engine_compatibility_note`: a durable artifact
+beats a conversation that scrolls away. `_review_findings` carries the
+exact quotes, page/section citations, and verdicts for every checklist
+item, plus the three additional cross-checks done opportunistically
+(MCC list exact match, cap amounts/scope/overflow all confirmed, fuel
+surcharge waiver corroborated by BOTH sources independently). What was
+explicitly NOT done: touching either source's `reviewer_status` field.
+Per Part I SS I.0/I.5 (drafted, not yet signed off, but treated as
+binding regardless): gathering and presenting evidence against a primary
+source is useful, legitimate work an AI assistant can do; marking that
+evidence "approved" is a distinct act reserved for a human who
+independently re-checks it. The two are kept structurally separate in
+the bundle file itself, not just in this log's prose -- `_review_
+findings` is additive documentation, `_sources.*.reviewer_status` is
+the actual gate, and only the second one requires Satya.
+
+### Verification
+
+`bundle_sbi_cashback.json` re-validated as well-formed JSON after the
+edit (`python -c "import json; json.load(...)"`); `tests/test_golden_
+sbi_cashback.py` re-run to confirm the new `_review_checklist`/`_review_
+findings` fields (both ignored by `bundle_from_dict`, same as `_note`/
+`_source` always have been) changed nothing: 2 passed, 1 skipped,
+identical to before this pass. No `compute/` code touched this
+session -- purely an evidence-gathering and documentation pass, per the
+user's own framing ("review the sources checklist").
+
+---
+
+## 2026-08-15 -- First per-entity reviewer approval recorded, exposing a
+bundle-format granularity gap
+
+### 119. Recorded Satya's approval on the entity it applies to, not on the
+source it cites -- source-level `reviewer_status` can't represent
+partial approval when one source backs multiple facts
+
+Satya's instruction was specific: approve the rent-inclusion reading
+(checklist item 2), while the Rs.99 Rewards Redemption Fee question
+(also citing `mitc`) stays open. The bundle's `_sources.mitc.
+reviewer_status` field, as built, is ONE flag for the WHOLE source --
+flipping it to `"approved"` would have silently swept the still-open
+Rs.99 question in with it, which is exactly the kind of overclaim Part
+I SS I.5 exists to prevent ("approved" must mean a human actually
+checked THAT fact, not "some fact this source supports"). Fixed by
+adding `_reviewer_status: "approved"` and `_reviewer_note` (recording
+who approved it, when, and why) directly on `thresholds[0]` (the
+fee_waiver threshold entity) instead -- the fact that was actually
+reviewed. `_sources.mitc.reviewer_status` is left `unreviewed`,
+correctly, since the source as a whole still has an open question
+attached to it.
+
+### 120. This is the real schema's own granularity, not a new invention --
+`source_links` is per `(source_id, entity_type, entity_id)`, never per
+bare source
+
+Checked `0001_init.sql` before deciding how to fix this (lines ~300-319):
+`source_links` has no "whole source approved" concept at all -- every
+row is a specific (source, entity) pair, each with its OWN `confidence`/
+`reviewer_status`. One MITC source with a hundred cited facts would, in
+the real schema, produce a hundred independent `source_links` rows, some
+approved and some not, simultaneously. The bundle file's `_sources.*.
+reviewer_status` was a drafting-time simplification that happened to
+work as long as every entity citing a source shared one approval state
+-- this task is the first time that assumption broke (two facts, two
+different states), and the fix (per-entity `_reviewer_status`) brings
+the FILE format one step closer to matching the DB format it's meant to
+produce, rather than patching around the mismatch. Not extended to every
+other entity in the bundle speculatively -- only `thresholds[0]` needed
+it this pass; the others still read their approval state from
+`_sources.*.reviewer_status` until one of them also needs to diverge
+from its source's overall state.
+
+### Verification
+
+`bundle_sbi_cashback.json` re-validated as well-formed JSON; `tests/
+test_golden_sbi_cashback.py` re-run (2 passed, 1 skipped, unchanged --
+`_reviewer_status`/`_reviewer_note` are new keys `bundle_from_dict`
+never reads, same as `_note`/`_source` always have been). `_review_
+checklist` item 2 marked `[APPROVED by Satya 2026-08-15]` inline, with
+a pointer to where the actual approval record lives; the Rs.99 item's
+wording changed from "surfaced during findings pass" to "STILL OPEN,
+pending confirmation" so a future reader scanning the checklist sees
+at a glance which items are settled and which aren't, without needing
+to cross-reference `_review_findings` for status.

@@ -142,7 +142,9 @@
         { "tier_index": 1, "threshold_amount": 200000, "payload": { "type": "waive_fee", "fee": "annual" } }
       ],
       "_source": "mitc",
-      "_note": "Renewal fee waived on annual spend >= 2,00,000. Waiver-eligible spend = all spend (rent/fuel excluded from REWARDS but NOT from waiver, unless MITC says otherwise — confirm rent inclusion in review)."
+      "_note": "Renewal fee waived on annual spend >= 2,00,000. Waiver-eligible spend = all spend, including rent/fuel (excluded from REWARDS but not from the waiver threshold).",
+      "_reviewer_status": "approved",
+      "_reviewer_note": "Approved by Satya 2026-08-15: MITC p.4's waiver clause ('Waived off on annual spends of Rs.2 Lakh or more') carries no exclusion anywhere in the MITC, unlike the reward-side MCC exclusions which live in a separately-scoped section of the T&C -- all spend, including rent/fuel, counts toward the Rs.2L threshold. This approval covers the rent-inclusion reading specifically, not every fact citing 'mitc' as a source -- see _sources.mitc.reviewer_status (still 'unreviewed') and the still-open Rs.99 Rewards Redemption Fee question in _review_checklist."
     }
   ],
 
@@ -168,9 +170,38 @@
 
   "_review_checklist": [
     "Confirm 'online' vs 'offline' channel mapping matches how SBI flags transactions (network online indicator).",
-    "Confirm whether rent (MCC 6513/7349) counts toward the 2L fee-waiver even though excluded from rewards — MITC/T&C wording.",
+    "[APPROVED by Satya 2026-08-15 -- see thresholds[0]._reviewer_status] Confirm whether rent (MCC 6513/7349) counts toward the 2L fee-waiver even though excluded from rewards — MITC/T&C wording.",
     "Confirm forex 3.5% for CASHBACK specifically in the MITC fee table (not a premium-tier exception).",
     "Statement-cycle caps approximated as calendar-month for MVP — flagged, acceptable per A.17.",
-    "Sub-100 txn exclusion is txn-mode-only; category-mode value will slightly overstate — acceptable, flagged."
-  ]
+    "Sub-100 txn exclusion is txn-mode-only; category-mode value will slightly overstate — acceptable, flagged.",
+    "STILL OPEN, pending confirmation: MITC p.31's 'Rewards Redemption Fee: Rs.99 ... Statement Credit ...' -- does this apply to CASHBACK's automatic monthly cashback posting, or only to points-cards' customer-initiated redemption-to-statement-credit? Not modelled anywhere in this bundle; if it applies, NACV is understated by ~Rs.99/instance."
+  ],
+
+  "_review_findings": {
+    "_note": "Evidence gathered against both full source PDFs (fetched and read in full, not just skimmed for the flagged items) -- for Satya's review, per Part I SS I.0/I.5: this is Claude doing the legwork (capture + cross-check), NOT a self-approval. reviewer_status on both _sources entries above is untouched (still 'unreviewed') -- only a human sets that.",
+    "checklist_item_1_channel_mapping": {
+      "verdict": "CONFIRMED",
+      "quote": "\"Online Spends will be identified basis the online indicators sent by Card Networks (VISA, Rupay. Etc.) and acquirer. Any transaction not categorized as online would be termed as offline.\"",
+      "source": "reward_terms, Sec 11.1(c)"
+    },
+    "checklist_item_2_rent_counts_toward_waiver": {
+      "verdict": "APPROVED by Satya 2026-08-15",
+      "quote": "\"999 (Waived off on annual spends of Rs.2 Lakh or more in the preceding year)\"",
+      "source": "mitc, p.4, CASHBACK SBI Card row",
+      "reasoning": "The waiver clause states the Rs.2L threshold with NO exclusion attached anywhere in the MITC; the reward-side MCC exclusions live in a separate, explicitly reward-scoped section (T&C 11.1(d), 'Cashback shall not be earned for...'). All spend, including rent/fuel, counts toward the waiver threshold. This was Claude's proposed reading based on absence-of-exclusion inference, not a direct quote -- Satya reviewed it and approved; see thresholds[0]._reviewer_status/_reviewer_note for the recorded approval (kept on the entity, not on _sources.mitc, since mitc also backs the still-open Rs.99 question below)."
+    },
+    "checklist_item_3_forex_3_5pct": {
+      "verdict": "CONFIRMED",
+      "quote": "\"Foreign Currency Transaction Fee: 3.5% (For all cards except AURUM, Elite, Prime NRI secured, Tata Neu Infinity SBI Credit Card, SBI Card Miles Elite/ Miles Prime/ Miles).\"",
+      "source": "mitc, p.30, Section N (Other Charges)",
+      "reasoning": "CASHBACK SBI Card is not in the exception list -> falls under the general 3.5%."
+    },
+    "checklist_items_4_5": "Not source-verification questions -- pre-accepted engine-modelling notes (Part A SS A.17 / category-mode's own known limits), unaffected by anything in either document.",
+    "additional_cross_checks_not_on_the_original_checklist": {
+      "mcc_exclusion_list": "Exact match, category-for-category and code-for-code, against reward_terms' own 'Below categories will not be eligible for Cashback benefit' table -- all 13 categories, every MCC.",
+      "cap_amounts_scope_overflow": "Rs.2,000 online / Rs.2,000 offline / Rs.4,000 aggregate (scope=card), overflow=zero for all three -- all confirmed verbatim against reward_terms Sec 11.1(j) ('will not accrue any cashback till [next cycle]').",
+      "fuel_surcharge_waiver": "Corroborated by BOTH sources independently agreeing (reward_terms Sec 13.1 AND mitc's own Surcharge table): 1% waiver, Rs.500-3,000 per txn, Rs.100/cycle cap -- highest confidence per Part I SS I.5's own weighting (two independent primary-ish sources agreeing)."
+    },
+    "open_question_not_previously_flagged": "mitc p.31: 'Rewards Redemption Fee: Rs.99. Applicable only on Physical products, Statement Credit & on Vouchers...' -- CASHBACK's payout IS a statement credit, but reward_terms Sec 11.1(a) describes it as automatic ('directly credited... within two working days'), not a customer-initiated redemption. Genuinely ambiguous from text alone whether the Rs.99 fee applies to CASHBACK's automatic monthly credit or only to points-cards' active redemption flow. Not modelled in this bundle either way -- added to _review_checklist above rather than guessed."
+  }
 }
