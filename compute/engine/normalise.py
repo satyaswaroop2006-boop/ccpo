@@ -52,6 +52,50 @@ DEFAULT_TICKET_SIZES: dict[str, Decimal] = {
     "insurance": Decimal("20000"),
     "rent": Decimal("30000"),
     "education": Decimal("40000"),
+    # NOT in Part C's original table -- added for Phase 5 Task A (docs/
+    # DECISIONS.md #130) as the "minimal new-category set" Satya approved
+    # so real cards' MCC-based reward exclusions (e.g. CASHBACK SBI's 13-
+    # group exclusion table) can be expressed without forcing unrelated
+    # spend into an existing bucket. Ticket-size guesses, same status as
+    # the rest of this table -- needs Satya's sign-off.
+    "wallet": Decimal("1000"),
+    "jewelry": Decimal("15000"),
+    "gift_novelty": Decimal("1500"),
+    "railways": Decimal("800"),
+    "quasi_cash": Decimal("5000"),
+    "digital_gaming": Decimal("1000"),
+    "tolls": Decimal("150"),
+    "government": Decimal("5000"),
+}
+
+# NOT specified in Part C as data (the *design* -- "category->MCC mapping
+# in the assumptions registry" -- is specified, C.2.1) -- this is that
+# registry, populated for Phase 5 Task A (docs/DECISIONS.md #130). Every
+# code below is transcribed from `compute/ingestion/bundle_sbi_cashback.
+# json`'s own `cashback_mcc_exclusions` selector, which is itself sourced
+# from CASHBACK SBI Card's reward_terms Sec 11.1(d) MCC table (already
+# reviewed, see that bundle's `_note`) -- not invented from memory (CLAUDE.
+# md rule 4 is about REAL CARD REWARD data; this is a generic MCC<->
+# merchant-category fact, the same kind of external standard every issuer's
+# T&C cites, but it is nonetheless drawn from one real source and Satya
+# should confirm it before any real card relies on it for a publish.
+# Categories not listed here map to `()` -- an mcc_include/mcc_exclude
+# selector naming a category with no known MCCs simply never matches on
+# that category (safe default: no exclusion silently applies), not a guess.
+DEFAULT_CATEGORY_MCC_MAP: dict[str, tuple[int, ...]] = {
+    "fuel": (5172, 5541, 5542, 5983),
+    "wallet": (6540, 6541),
+    "rent": (6513, 7349),
+    "jewelry": (5051, 5094, 7631, 5944),
+    "education": (5111, 5192, 5942, 5943, 8211, 8220, 8241, 8244, 8249, 8299, 8351),
+    "utilities": (4900, 4814, 4816, 4899, 9399),
+    "insurance": (5960, 6300, 6381),
+    "gift_novelty": (5947,),
+    "railways": (4011, 4112),
+    "quasi_cash": (6011, 6012, 6051),
+    "digital_gaming": (7993, 7994, 5816),
+    "tolls": (4784,),
+    "government": (9222, 9311, 9402),
 }
 
 # NOT specified in Part C -- a new assumption-registry default introduced
@@ -75,6 +119,7 @@ class AssumptionsSnapshot:
 
     ticket_sizes: dict[str, Decimal] = field(default_factory=lambda: dict(DEFAULT_TICKET_SIZES))
     upi_category_mix: dict[str, Decimal] = field(default_factory=lambda: dict(DEFAULT_UPI_CATEGORY_MIX))
+    category_mcc_map: dict[str, tuple[int, ...]] = field(default_factory=lambda: dict(DEFAULT_CATEGORY_MCC_MAP))
 
 
 @dataclass(frozen=True)

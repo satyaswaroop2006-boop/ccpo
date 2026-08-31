@@ -24,9 +24,28 @@ only caller that ever passes a non-empty `active_rule_keys`, once a
 threshold crossing says a specific rule is active for specific months.
 
 Selector matching covers category, channel, merchant_group, and geography
-(domestic/international/all -- syn_travel's "intl" rule). Other C.2.1
-fields (mcc, networks, transaction amount, date range) are still rejected
-rather than silently ignored, same posture as Stage 2.
+(domestic/international/all -- syn_travel's "intl" rule), plus txn_min/
+txn_max (Phase 5 Task A, docs/DECISIONS.md #130): accepted but IGNORED for
+matching purposes -- category mode has no per-transaction data to test
+them against -- so a rule using them binds on its OTHER fields as if the
+txn bound weren't there, flagged `txn_threshold_unenforced` on its
+bindings instead of silently approximating. Deliberately NOT the same
+resolution as eligibility.py's ExclusionSelector, which treats an
+unverifiable txn bound as "never matches": here, ignoring the field means
+a rule *over-applies* on the txn dimension (extra reward credit on
+transactions outside its true band) -- bounded by whatever cap the rule
+already carries in practice, not the "zero every reward" blast radius an
+over-matching EXCLUSION has. Making an earning-rule selector "never match"
+whenever it names a txn bound would make the field useless to ever set
+(no rule could use it for anything), so the two modules genuinely need
+different defaults, not a shared one. mcc_include/mcc_exclude support
+landed on eligibility.py's ExclusionSelector this same task but was
+deliberately NOT extended here yet -- no earning rule in any bundle needs
+it, and threading the category->MCC registry through this module's other
+callers (caps.py/thresholds.py/costs.py, several different selector
+contexts) is a separate, larger increment than "cheap in the same pass"
+covers. Other C.2.1 fields (mcc, networks, date range) are still rejected
+rather than silently ignored.
 
 `selector_matches` is the canonical implementation -- caps.py, thresholds.py,
 and costs.py all import it directly rather than keeping their own copies
@@ -55,7 +74,7 @@ ALL_SELECTOR_FIELDS = (
     "categories", "channels", "merchant_groups", "merchants", "mcc_include",
     "mcc_exclude", "networks", "geography", "txn_min", "txn_max", "date_from", "date_to",
 )
-SUPPORTED_SELECTOR_FIELDS = frozenset({"categories", "channels", "merchant_groups", "geography"})
+SUPPORTED_SELECTOR_FIELDS = frozenset({"categories", "channels", "merchant_groups", "geography", "txn_min", "txn_max"})
 # Public (was module-private) -- costs.py's surcharge validator needs the
 # same list, and duplicating it risked the two ever drifting apart.
 UNSUPPORTED_SELECTOR_FIELDS = tuple(f for f in ALL_SELECTOR_FIELDS if f not in SUPPORTED_SELECTOR_FIELDS)
@@ -131,7 +150,15 @@ def selector_matches(selector: Selector, segment: SpendSegment) -> bool:
         return False
     if selector.geography is not None and selector.geography != "all" and segment.geography != selector.geography:
         return False
+    # txn_min/txn_max: transaction-level, no data to test in category mode --
+    # deliberately not evaluated here (see match_segment's binding flags).
     return True
+
+
+def _selector_flags(selector: Selector) -> tuple[str, ...]:
+    if selector.txn_min is not None or selector.txn_max is not None:
+        return ("txn_threshold_unenforced",)
+    return ()
 
 
 def _resolve_conflict(candidates: list[EarningRule]) -> tuple[EarningRule, bool]:
@@ -171,10 +198,12 @@ def match_segment(
     bindings: list[RuleBinding] = []
     if non_stacking:
         winner, tie_warning = _resolve_conflict(non_stacking)
-        flags = ("priority_specificity_tie",) if tie_warning else ()
+        flags = _selector_flags(winner.selector)
+        if tie_warning:
+            flags = flags + ("priority_specificity_tie",)
         bindings.append(RuleBinding(rule_key=winner.key, segment=segment, stacked=False, flags=flags))
     for rule in stacking:
-        bindings.append(RuleBinding(rule_key=rule.key, segment=segment, stacked=True))
+        bindings.append(RuleBinding(rule_key=rule.key, segment=segment, stacked=True, flags=_selector_flags(rule.selector)))
     return tuple(bindings)
 
 

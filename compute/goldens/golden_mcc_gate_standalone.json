@@ -1,0 +1,50 @@
+{
+  "id": "golden_mcc_gate_standalone",
+  "purpose": "Phase 5 Task A regression gate (docs/DECISIONS.md #130): an mcc_include exclusion, evaluated end-to-end through the real pipeline, proves the fixed #111/#114 bug stays fixed -- before this task, engine/card_bundle.py's selector loader silently dropped mcc_include, producing an all-None ExclusionSelector that eligibility._selector_matches treated as MATCHES EVERYTHING (a selector like this one would have zeroed ALL rewards, not just fuel's). This card is standalone (not in seeds/synthetic_cards.py's CARDS catalog -- adding a 13th card there would ripple into every hardcoded '12 cards' assumption in the optimiser/seed tests, out of scope for an engine-mechanism proof), same pattern as compute/ingestion/bundle_sbi_cashback.json's own standalone real-card fixture. Deliberately named WITHOUT the 'golden_syn_' prefix -- tests/test_evaluate_orchestrator.py globs golden_syn_*.json and assumes every match's 'card' field is a CARDS lookup key, which this file's embedded card dict is not; this file is read only by its own tests/test_golden_mcc_gate.py.",
+  "card": {
+    "key": "syn_mcc_gate",
+    "name": "Synth MCC Gate (Task A regression, not a catalog card)",
+    "currency": "cashback_inr",
+    "version": { "annual_fee": 0, "joining_fee": 0, "forex_markup": 0.035 },
+    "earning_rules": [
+      { "key": "base", "selector": {}, "accrual": { "type": "percentage", "rate": 0.02, "rounding": "floor_paise_per_txn", "currency": null }, "priority": 10 }
+    ],
+    "exclusions": [
+      {
+        "key": "fuel_mcc_exclusion",
+        "selector": { "mcc_include": [5541, 5542] },
+        "excluded_from": ["rewards"],
+        "note": "5541/5542 are 2 of fuel's 4 mapped MCCs (engine.normalise.DEFAULT_CATEGORY_MCC_MAP) -- a PARTIAL intersection with the category's mapped set, deliberately, to prove matching is set-intersection, not exact-set-equality. category-mode has no per-MCC granularity, so a match zeroes the whole fuel category, not just the matched MCCs' hypothetical share."
+      }
+    ]
+  },
+  "currencies": [
+    { "key": "cashback_inr", "routes": [ { "key": "stmt", "route_type": "statement_credit", "ratio": 1.0 } ] }
+  ],
+  "spend_annual": {
+    "grocery": 120000,
+    "fuel": 96000
+  },
+  "seasonality": "uniform",
+  "_hand_computation": [
+    "Stage 2 (eligibility): fuel_mcc_exclusion's selector has mcc_include=[5541,5542]. engine.normalise.DEFAULT_CATEGORY_MCC_MAP['fuel'] = (5172,5541,5542,5983) -- intersection {5541,5542} is non-empty, so every fuel segment matches and is excluded from the REWARD view (excluded_from=['rewards'] only -- milestone/waiver views are untouched). grocery has no entry in DEFAULT_CATEGORY_MCC_MAP at all, so its mapped MCC set is empty -- intersection with [5541,5542] is empty, selector does not match, grocery is fully untouched. This is the crux of the regression proof: before Task A, this selector's mcc_include field was silently dropped by card_bundle.py's loader, producing an ExclusionSelector with EVERY field None -- eligibility._selector_matches treats an all-None selector as matching every segment, so grocery would ALSO have been wrongly zeroed. It is not, here.",
+    "Reward view = grocery only = Rs1,20,000. Milestone/waiver views = grocery + fuel = Rs1,20,000 + Rs96,000 = Rs2,16,000 (fuel still counts there -- excluded_from=['rewards'] is scoped, same three-independent-masks design as syn_waiver's C.9 Example 5).",
+    "apply_eligibility's own flags: fuel_mcc_exclusion's selector uses mcc_include -> 'mcc_category_estimated' (Part C SS C.2.1: category-mode mcc matching is a registry-mapped estimate, always flagged, whether or not it happens to be materially wrong).",
+    "Stage 3 (match): base (selector={}) is the card's only earning rule -- it matches every REWARD-view segment. Only grocery reaches Stage 3; fuel was already removed at Stage 2 and never enters matching or accrual at all.",
+    "Stage 4 (accrue): percentage 2%, floor_paise_per_txn. Grocery ticket size 700 (DEFAULT_TICKET_SIZES) -> 700*0.02=14.00 exactly, zero floor loss, no rounding_estimated. Annual gross = 1,20,000 * 0.02 = Rs2,400.00.",
+    "Stage 5 (cap): no caps on this card -> no-op.",
+    "Stage 6-7 (thresholds): none on this card -> threshold_events empty, waived=False (moot -- annual_fee=0 regardless).",
+    "Fees: joining_fee=0, annual_fee=0 -> steady_fee=Rs0.00, year1_fee=Rs0.00.",
+    "NACV steady-state = 2,400.00 (GR) - 0.00 (fee) = Rs2,400.00. NACV Year-1 = same = Rs2,400.00.",
+    "3-year cumulative = 2,400.00 + 2*2,400.00 = Rs7,200.00."
+  ],
+  "expected": {
+    "gross_reward_value": 2400.00,
+    "fee_paid": 0.00,
+    "nacv_steady_state": 2400.00,
+    "nacv_year_1": 2400.00,
+    "nacv_3yr": 7200.00,
+    "flags": ["mcc_category_estimated"]
+  },
+  "tolerance_rupees": 0.01
+}

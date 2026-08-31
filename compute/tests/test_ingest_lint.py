@@ -115,10 +115,13 @@ def test_engine_compatibility_passes_on_a_compliant_bundle():
 
 
 def test_engine_compatibility_flags_every_bad_exclusion_not_just_the_first():
+    # mcc_include and txn_max are now engine-supported (Phase 5 Task A) --
+    # merchants/date_from are the still-genuinely-unsupported fields used
+    # here to exercise this check.
     bundle = _minimal_compliant_bundle()
     bundle["exclusions"] = [
-        {"key": "excl_a", "selector": {"mcc_include": [5172]}, "excluded_from": ["rewards"], "source_refs": ["src1"]},
-        {"key": "excl_b", "selector": {"txn_max": 100}, "excluded_from": ["rewards"], "source_refs": ["src1"]},
+        {"key": "excl_a", "selector": {"merchants": ["bigbasket"]}, "excluded_from": ["rewards"], "source_refs": ["src1"]},
+        {"key": "excl_b", "selector": {"date_from": "2026-01-01"}, "excluded_from": ["rewards"], "source_refs": ["src1"]},
     ]
     issues = check_engine_compatibility(bundle)
     entities = {i.entity for i in issues}
@@ -140,27 +143,23 @@ def test_engine_compatibility_flags_bundle_from_dict_translation_failure():
 # ---------------------------------------------------------------------------
 
 def test_lint_bundle_against_real_sbi_bundle_matches_known_findings():
-    """Locks in the exact findings docs/DECISIONS.md already records by
-    hand: the currency/route have no citation at all, and both exclusions
-    use selector fields the engine can't evaluate. If this tool ever
-    finds something different, that's a real change worth investigating,
-    not noise to silence."""
+    """Locks in the exact findings docs/DECISIONS.md records by hand. The
+    bundle's two exclusions (mcc_include, txn_max) USED to fail engine_
+    compatibility -- as of Phase 5 Task A (docs/DECISIONS.md #130) both
+    selector fields are engine-supported, so lint now accepts them. The
+    currency/route citation gap (#129) USED to fail provenance_
+    completeness -- Satya resolved it by finding a real citation
+    (reward_terms Sec 11.1(a) + FAQ 12/14, docs/DECISIONS.md #137) rather
+    than amending Part I to exempt it, so both entities now cite a source
+    too. The bundle passes cleanly today -- an intended reject->accept
+    flip both times, not a regression. If this tool ever finds something
+    different again, that's a real change worth investigating, not noise
+    to silence."""
     bundle = load_ingestion_bundle(INGESTION_DIR / "bundle_sbi_cashback.json")
     report = lint_bundle(bundle)
 
-    assert report.passed is False
-    assert len(report.errors) == 4
-
-    entities = {i.entity for i in report.issues}
-    assert "currencies[0] (cashback_inr)" in entities
-    assert "currencies[0].routes[0] (statement_credit)" in entities
-    assert "exclusions (cashback_mcc_exclusions)" in entities
-    assert "exclusions (min_txn_100)" in entities
-
-    provenance_issues = [i for i in report.issues if i.check == "provenance_completeness"]
-    compat_issues = [i for i in report.issues if i.check == "engine_compatibility"]
-    assert len(provenance_issues) == 2
-    assert len(compat_issues) == 2
+    assert report.passed is True
+    assert report.errors == ()
 
     assert "C.11" not in " ".join(report.checks_not_implemented)  # sanity: the list itself, not a stray citation
     assert len(report.checks_not_implemented) == 4  # the four C.11 checks this tool deliberately doesn't implement

@@ -1,0 +1,26 @@
+-- ============================================================================
+-- Credit Card Portfolio Optimiser — Migration 0002_surcharge_waiver.sql
+-- PostgreSQL 15+ / Supabase
+--
+-- Adds `surcharges.waiver` (nullable JSONB), the DB-side counterpart of
+-- Phase 5 Task B's engine.costs.SurchargeWaiver (docs/DECISIONS.md #131/
+-- #132). CASHBACK SBI's real fuel-surcharge waiver (1% waived on txns
+-- Rs500-3000, capped Rs100/statement-cycle) is the first real card that
+-- needs this column -- discovered while building `ingest link`, which is
+-- what surfaced that `0001_init.sql`'s `surcharges` table predates the
+-- engine concept entirely (Task B was an engine-only change; nothing in
+-- it touched the schema at the time).
+--
+-- Additive only, per Part D SS D.3's own stated pattern ("each lands as
+-- an additive migration; nothing in 0001_init.sql needs rework") --
+-- nullable column, no backfill, no rewrite of any existing row. Every
+-- one of the 12 synthetic cards' surcharges (only syn_fuel has one, and
+-- it has no waiver -- its refund is modelled as a separate earning_rule,
+-- the OTHER pattern Task B left standing) is untouched: NULL in, NULL
+-- read back, `engine.card_bundle._surcharge_waiver_from_dict` never
+-- invoked for them (`waiver: SurchargeWaiver | None = None` already
+-- treats absence as "no waiver", so this is a strict superset of the
+-- prior shape, not a behaviour change for anything already seeded).
+-- ============================================================================
+
+alter table surcharges add column waiver jsonb;

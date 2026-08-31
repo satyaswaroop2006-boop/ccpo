@@ -180,9 +180,13 @@ def test_unknown_excluded_from_scope_raises():
 
 
 def test_unsupported_selector_field_raises():
+    # networks stays genuinely unsupported -- mcc_include/mcc_exclude and
+    # txn_min/txn_max are now accepted (Phase 5 Task A); see
+    # test_mcc_include_excludes_only_the_mapped_category and
+    # test_txn_threshold_selector_is_accepted_but_unenforced below.
     bad = Exclusion(
-        key="bad_mcc",
-        selector=ExclusionSelector(mcc_exclude=(6540,)),
+        key="bad_networks",
+        selector=ExclusionSelector(networks=("rupay",)),
         excluded_from=("rewards",),
     )
     spend = NormalisedSpend(segments=tuple(_flat_year("fuel", None, "1000")))
@@ -199,3 +203,69 @@ def test_geography_exclusion_matches_only_that_geography():
     result = apply_eligibility(spend, (excl,))
     assert domestic_seg in result.reward
     assert intl_seg not in result.reward
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task A: mcc_include/mcc_exclude (registry-mapped) and txn_min/
+# txn_max (accepted, unenforced + flagged) -- docs/DECISIONS.md #130.
+# End-to-end proof through the real category_mcc_map + accrual is
+# goldens/golden_syn_mcc_gate.json / tests/test_golden_mcc_gate.py; these
+# are the narrower unit-level checks (mcc_exclude's opposite polarity,
+# the txn flag, and the "no category_mcc_map supplied" safe default).
+# ---------------------------------------------------------------------------
+
+_FUEL_MCCS = (5172, 5541, 5542, 5983)
+_CATEGORY_MCC_MAP = {"fuel": _FUEL_MCCS, "insurance": (5960, 6300, 6381)}
+
+
+def test_mcc_include_matches_only_the_mapped_category():
+    fuel = SpendSegment(category="fuel", channel=None, month=1, amount=Decimal("1000"), ticket_size=Decimal("1000"))
+    insurance = SpendSegment(category="insurance", channel=None, month=1, amount=Decimal("1000"), ticket_size=Decimal("1000"))
+    excl = Exclusion(key="no_fuel", selector=ExclusionSelector(mcc_include=(5541,)), excluded_from=("rewards",))
+
+    result = apply_eligibility(NormalisedSpend(segments=(fuel, insurance)), (excl,), _CATEGORY_MCC_MAP)
+    assert fuel not in result.reward
+    assert insurance in result.reward
+    assert result.flags == ("mcc_category_estimated",)
+
+
+def test_mcc_exclude_is_a_blacklist_not_a_whitelist():
+    """Opposite polarity from mcc_include: mcc_exclude REMOVES a segment
+    from matching (fails the selector) when its mapped MCCs intersect the
+    list -- everything else still matches (here, categories/channels/etc
+    are all null, so an unaffected category matches by default)."""
+    fuel = SpendSegment(category="fuel", channel=None, month=1, amount=Decimal("1000"), ticket_size=Decimal("1000"))
+    insurance = SpendSegment(category="insurance", channel=None, month=1, amount=Decimal("1000"), ticket_size=Decimal("1000"))
+    excl = Exclusion(key="fuel_stays_eligible", selector=ExclusionSelector(mcc_exclude=(5541,)), excluded_from=("rewards",))
+
+    result = apply_eligibility(NormalisedSpend(segments=(fuel, insurance)), (excl,), _CATEGORY_MCC_MAP)
+    # selector matches everything EXCEPT fuel -> insurance is what gets excluded
+    assert fuel in result.reward
+    assert insurance not in result.reward
+
+
+def test_mcc_selector_with_no_category_mcc_map_matches_nothing_not_everything():
+    """The exact #111 regression: with no registry mapping supplied at all
+    (category_mcc_map defaults to {}), a category's mapped MCC set is
+    empty, so mcc_include can never intersect it -- the selector matches
+    NOTHING, the safe direction, never "everything" (the old silently-
+    dropped-field bug)."""
+    fuel = SpendSegment(category="fuel", channel=None, month=1, amount=Decimal("1000"), ticket_size=Decimal("1000"))
+    excl = Exclusion(key="no_fuel", selector=ExclusionSelector(mcc_include=(5541,)), excluded_from=("rewards",))
+
+    result = apply_eligibility(NormalisedSpend(segments=(fuel,)), (excl,))  # no category_mcc_map arg
+    assert fuel in result.reward  # NOT excluded -- would be wrong if this silently matched everything
+
+
+def test_txn_threshold_selector_is_accepted_but_unenforced_and_flagged():
+    """txn_min/txn_max no longer raise (Phase 5 Task A), but category mode
+    has no per-transaction data to test them against -- the selector must
+    not filter anything, and its presence must surface as a flag rather
+    than silently approximating (docs/DECISIONS.md #111/#129's already-
+    approved posture, CASHBACK SBI's own min_txn_100 exclusion)."""
+    seg = SpendSegment(category="fuel", channel=None, month=1, amount=Decimal("1000"), ticket_size=Decimal("1000"))
+    excl = Exclusion(key="min_txn_100", selector=ExclusionSelector(txn_max=Decimal("100")), excluded_from=("rewards",))
+
+    result = apply_eligibility(NormalisedSpend(segments=(seg,)), (excl,))
+    assert seg in result.reward  # not filtered -- txn-level precision unavailable in category mode
+    assert result.flags == ("txn_threshold_unenforced",)

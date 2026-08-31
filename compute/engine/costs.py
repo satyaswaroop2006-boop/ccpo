@@ -20,11 +20,24 @@ Three independent cost lines, each a direct transcription of its formula:
   selector-matched spend, rate . (1+gst_on_surcharge). No conflict
   resolution between multiple surcharge rules (unlike earning rules) --
   A.11 doesn't describe one, so each independently sums whatever it
-  matches. Surcharge WAIVERS (syn_fuel) are modelled entirely outside this
-  stage, as an ordinary capped earning rule refunding the surcharge
-  through Stages 3-5 (C.9 Example 10's own framing: "surcharge waivers are
-  just capped negative-cost rules") -- costs.py charges the flat,
-  unconditional rate and never needs to know a waiver exists.
+  matches. Surcharge WAIVERS come in two shapes, deliberately NOT unified
+  into one mechanism (docs/DECISIONS.md #131/#132):
+    - syn_fuel's shape (C.9 Example 10): an ordinary capped earning rule
+      refunding the surcharge through Stages 3-5, when the surcharged
+      category is otherwise fully reward-eligible. Unaffected by this
+      module.
+    - `Surcharge.waiver` (this module, Phase 5 Task B): computed directly
+      here, against the SAME raw matched spend the surcharge itself uses
+      -- required when the surcharged category is ALSO excluded from
+      Stage 2's "rewards" view (CASHBACK SBI's real fuel exclusion),
+      which makes the earning-rule shape permanently inert (proven
+      empirically, not assumed -- a refund-shaped earning_rule can only
+      ever see `eligible.reward`, and Stage 2 already stripped every
+      fuel segment out of it). A waiver isn't a "reward" in C.2.5's
+      sense, so it was never correctly gated by that mask in the first
+      place; computing it here, alongside the surcharge it offsets,
+      sidesteps the conflict instead of inventing a fourth eligibility
+      mask to route around it.
 
 GST_RATE=0.18 is a fixed constant, not a per-card parameter: no card in
 the seed catalog overrides it, and it matches golden_syn_ecom_basic.json's
@@ -36,6 +49,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Sequence
 
+from engine.caps import VALID_WINDOW_KINDS, Window, window_flags, window_instances
 from engine.match import Selector, UNSUPPORTED_SELECTOR_FIELDS, selector_matches
 from engine.normalise import SpendSegment
 from engine.thresholds import ThresholdEvent
@@ -44,11 +58,48 @@ GST_RATE = Decimal("0.18")
 
 
 @dataclass(frozen=True)
+class SurchargeWaiver:
+    """A capped rebate on a Surcharge's own rate (Part A SS A.11: "fuel
+    surcharge waivers set sigma=0 up to the waiver's own monthly cap"),
+    evaluated directly against the surcharge's own matched (raw) spend --
+    see module docstring for why this lives here rather than as an
+    earning_rule for cards like CASHBACK SBI.
+
+    `rate` is the waived portion of the surcharge's own rate -- almost
+    always equal to `Surcharge.rate` (a full waiver), kept as a separate
+    field rather than implied so a PARTIAL waiver is representable without
+    a future schema change. `cap_amount` bounds the PRE-GST waived amount
+    per `cap_window` instance (an assumption, not a sourced fact -- the
+    real bundle's "capped Rs100/statement" doesn't specify GST treatment
+    either way; GST is then applied on top of whatever is actually waived,
+    mirroring how the surcharge's own `gst_on_surcharge` is a separate
+    multiplicative step, not folded into `rate`). `txn_min`/`txn_max` are
+    accepted but NOT enforced in category mode -- same posture as Phase 5
+    Task A's ExclusionSelector/match.Selector: no per-transaction data to
+    test them against, so the waiver applies to the FULL matched spend in
+    each window instance rather than silently approximating which slice
+    of it would really qualify, flagged `txn_threshold_unenforced` instead."""
+
+    rate: Decimal
+    cap_amount: Decimal
+    cap_window: Window
+    txn_min: Decimal | None = None
+    txn_max: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class Surcharge:
     key: str
     selector: Selector
     rate: Decimal
     gst_on_surcharge: Decimal = GST_RATE
+    waiver: SurchargeWaiver | None = None
+
+
+@dataclass(frozen=True)
+class SurchargeCostResult:
+    total: Decimal
+    flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -97,14 +148,38 @@ def validate_surcharge(surcharge: Surcharge) -> None:
             f"surcharge {surcharge.key!r} selector uses field(s) {used_unsupported} that "
             "category-mode spend segments cannot be matched against"
         )
+    if surcharge.waiver is not None:
+        waiver = surcharge.waiver
+        if waiver.cap_window.kind not in VALID_WINDOW_KINDS:
+            raise ValueError(f"surcharge {surcharge.key!r} waiver: unknown window kind {waiver.cap_window.kind!r}")
+        if waiver.rate > surcharge.rate:
+            raise ValueError(
+                f"surcharge {surcharge.key!r} waiver rate {waiver.rate} exceeds the surcharge's own rate {surcharge.rate}"
+            )
 
 
-def surcharge_cost(segments: Sequence[SpendSegment], surcharges: Sequence[Surcharge]) -> Decimal:
+def surcharge_cost(segments: Sequence[SpendSegment], surcharges: Sequence[Surcharge]) -> SurchargeCostResult:
     total = Decimal("0")
+    flags: set[str] = set()
+
     for surcharge in surcharges:
         validate_surcharge(surcharge)
-        matching_spend = sum(
-            (s.amount for s in segments if selector_matches(surcharge.selector, s)), Decimal("0")
-        )
-        total += surcharge.rate * (1 + surcharge.gst_on_surcharge) * matching_spend
-    return total
+        matching_segments = [s for s in segments if selector_matches(surcharge.selector, s)]
+        matching_spend = sum((s.amount for s in matching_segments), Decimal("0"))
+        gross = surcharge.rate * (1 + surcharge.gst_on_surcharge) * matching_spend
+
+        waived = Decimal("0")
+        if surcharge.waiver is not None:
+            waiver = surcharge.waiver
+            if waiver.txn_min is not None or waiver.txn_max is not None:
+                flags.add("txn_threshold_unenforced")
+            flags.update(window_flags(waiver.cap_window))
+            for instance_months in window_instances(waiver.cap_window):
+                month_set = set(instance_months)
+                instance_spend = sum((s.amount for s in matching_segments if s.month in month_set), Decimal("0"))
+                instance_waived_base = min(waiver.rate * instance_spend, waiver.cap_amount)
+                waived += instance_waived_base * (1 + surcharge.gst_on_surcharge)
+
+        total += max(gross - waived, Decimal("0"))
+
+    return SurchargeCostResult(total=total, flags=tuple(sorted(flags)))

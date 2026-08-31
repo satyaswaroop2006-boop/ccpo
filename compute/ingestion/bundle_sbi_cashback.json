@@ -33,14 +33,17 @@
     "_note": "Fee 999/999, renewal waived on annual spend >= 2,00,000 (see waiver threshold). Forex 3.5% (MITC standard, non-premium tier)."
   },
 
-  "currency": "cashback_inr",
+  "currency": "sbi_cashback_inr",
   "currencies": [
     {
-      "key": "cashback_inr",
+      "key": "sbi_cashback_inr",
       "routes": [
-        { "key": "statement_credit", "route_type": "statement_credit", "ratio": 1.0, "friction_default": 1.0 }
+        { "key": "statement_credit", "route_type": "statement_credit", "ratio": 1.0, "friction_default": 1.0,
+          "_source": "reward_terms",
+          "_note": "Ratio 1.0 (direct rupee credit, no conversion) -- reward_terms Sec 11.1(a): 'Card Cashback earned on such SBI Card is directly credited to the SBI Card account within two working days of the statement generation.' route_type=statement_credit -- reward_terms FAQ 14: 'The Card Cashback will be automatically credited to your SBI Card account and will reflect in your monthly statement.'" }
       ],
-      "_note": "Direct statement-credit cashback. v = 1. No redemption ambiguity. FLAGGED by `ingest lint` (compute/ingest): neither this currency nor its route carries a _source/source_refs citation -- see _review_checklist item 7."
+      "_source": "reward_terms",
+      "_note": "Direct statement-credit cashback, v = 1, no redemption ambiguity -- resolved per _review_findings.checklist_item_7_currency_route_provenance (was FLAGGED by `ingest lint`, see docs/DECISIONS.md #129/#137). Key renamed from 'cashback_inr' to 'sbi_cashback_inr' on 2026-08-31 (docs/DECISIONS.md #139) -- the original key collided with the SYNTHETIC test catalog's own reward_currencies row of the same name (reward_currencies.key is globally unique in the schema, confirmed live), which `ingest link` correctly refused to let this real card silently share."
     }
   ],
 
@@ -48,7 +51,7 @@
     {
       "key": "online_5pct",
       "selector": { "channels": ["online"] },
-      "accrual": { "type": "percentage", "rate": 0.05, "rounding": "floor_paise_per_txn", "currency": "cashback_inr" },
+      "accrual": { "type": "percentage", "rate": 0.05, "rounding": "floor_paise_per_txn", "currency": "sbi_cashback_inr" },
       "caps": ["cap_online_monthly", "cap_aggregate_monthly"],
       "priority": 100,
       "_source": "reward_terms",
@@ -57,7 +60,7 @@
     {
       "key": "offline_1pct",
       "selector": { "channels": ["pos", "contactless"] },
-      "accrual": { "type": "percentage", "rate": 0.01, "rounding": "floor_paise_per_txn", "currency": "cashback_inr" },
+      "accrual": { "type": "percentage", "rate": 0.01, "rounding": "floor_paise_per_txn", "currency": "sbi_cashback_inr" },
       "caps": ["cap_offline_monthly", "cap_aggregate_monthly"],
       "priority": 90,
       "_source": "reward_terms",
@@ -131,7 +134,7 @@
     }
   ],
 
-  "_engine_compatibility_note": "Both entries in exclusions[] above use selector fields (mcc_include, txn_max) that Part C defines but engine/card_bundle.py::_exclusion_selector_from_dict does not read, and engine/eligibility.py cannot evaluate (Stage 2 only supports categories/channels/merchant_group/geography). These are the CORRECT Part C field names -- this is an engine-support gap, not a naming error, so nothing here was renamed. IMPORTANT: loading exclusions[] as-is through bundle_from_dict is UNSAFE, not just inert -- _exclusion_selector_from_dict silently drops mcc_include/txn_max, producing an ExclusionSelector with every field None, which engine/eligibility.py's _selector_matches treats as MATCHES EVERYTHING. Since excluded_from=['rewards'], this would zero out ALL cashback, not just the intended fuel/rent/sub-Rs100 spend. Any tooling loading this bundle must drop or specially handle exclusions[] until MCC/txn-value selector support lands in the engine. See docs/DECISIONS.md #111; tests/test_golden_sbi_cashback.py's _adapt_ingestion_bundle demonstrates the safe handling.",
+  "_engine_compatibility_note": "UPDATED as of Phase 5 Task A (docs/DECISIONS.md #130): both entries in exclusions[] above use selector fields (mcc_include, txn_max) that Part C defines -- these are now ENGINE-SUPPORTED. mcc_include is evaluated via a registry category->MCC map (engine.normalise.DEFAULT_CATEGORY_MCC_MAP, itself transcribed from this bundle's own sourced MCC table -- see that map's own comment) and flagged mcc_category_estimated; txn_max is accepted but deliberately unenforced in category mode (no per-transaction data to test it against) and flagged txn_threshold_unenforced instead of silently approximating. Loading exclusions[] as-is through bundle_from_dict is now safe -- the historical danger this note used to describe (_exclusion_selector_from_dict silently dropping these fields, producing an all-None ExclusionSelector that matched EVERYTHING and zeroed ALL cashback) is fixed; goldens/golden_mcc_gate_standalone.json is that fix's regression gate. tests/test_golden_sbi_cashback.py's _adapt_ingestion_bundle still drops exclusions[] for its own scenarios, but only because neither touches an MCC-excluded category or a sub-Rs100 ticket (provably inert either way), not because loading it is unsafe.",
 
   "thresholds": [
     {
@@ -162,7 +165,7 @@
       },
       "gst_on_surcharge": 0.18,
       "_source": "reward_terms",
-      "_note": "1% fuel surcharge waiver on txns 500-3000, max 100/statement/account (FAQ 17 + T&C 13.1). engine/costs.py::Surcharge has no field for the 'waiver' sub-object above -- it is NOT consumed by bundle_from_dict (silently ignored, same as any other unread key), and the refund it describes is NOT modelled anywhere yet. Per docs/DECISIONS.md #26's syn_fuel precedent, this needs to become a SEPARATE capped earning_rule (refunding the surcharge) before this card's real fuel-surcharge economics are correctly represented. See docs/DECISIONS.md #110."
+      "_note": "1% fuel surcharge waiver on txns 500-3000, max 100/statement/account (FAQ 17 + T&C 13.1). UPDATED as of Phase 5 Task B (docs/DECISIONS.md #131/#132): the 'waiver' sub-object above IS now consumed, via engine.costs.Surcharge.waiver / SurchargeWaiver -- NOT as a separate earning_rule (the syn_fuel precedent, docs/DECISIONS.md #26, was tried first and confirmed empirically inert for this card: cashback_mcc_exclusions already strips ALL fuel spend from Stage 2's 'rewards' view, so a refund-shaped earning_rule can only ever see zero fuel segments). Computed instead directly in costs.surcharge_cost() against the same raw matched spend the surcharge itself uses, capped per statement_cycle instance, txn_min/txn_max accepted-but-unenforced-and-flagged same as Task A's posture. Verified: Rs8,000/month fuel spend nets to Rs0 surcharge cost (waived_base=Rs80 < Rs100 cap); Rs20,000/month nets to Rs118.00/month (capped at Rs100 pre-GST). See docs/DECISIONS.md #110 for the original gap this closes."
     }
   ],
 
@@ -175,7 +178,7 @@
     "Statement-cycle caps approximated as calendar-month for MVP — flagged, acceptable per A.17.",
     "Sub-100 txn exclusion is txn-mode-only; category-mode value will slightly overstate — acceptable, flagged.",
     "[APPROVED by Satya 2026-08-15 -- see _review_findings.checklist_item_6_rs99_redemption_fee] MITC p.31's 'Rewards Redemption Fee: Rs.99 ... Statement Credit ...' -- does NOT apply to CASHBACK's automatic monthly cashback posting (no fee modelled, correctly).",
-    "NEW, found by compute/ingest's lint tool (not by manual review): currencies[0] (cashback_inr) and its route (statement_credit) carry no source citation at all. The 1:1 statement-credit ratio is arguably self-evident (cashback IS rupees, v=1 by construction, not something that needs sourcing the way a transfer ratio would) -- but Part I SS I.0 draws no exception for 'obvious' facts. Needs either a source_refs pointing at the reward_terms/mitc citation that establishes it's a direct rupee-denominated cashback (not points needing a redemption rate), or an explicit decision that self-evident currency mechanics are exempt from SS I.0 (a Part I amendment, not a per-bundle judgment call)."
+    "[RESOLVED 2026-08-31 -- see _review_findings.checklist_item_7_currency_route_provenance] Found by compute/ingest's lint tool (not by manual review): currencies[0] (cashback_inr) and its route (statement_credit) carried no source citation at all. Satya's decision: require a real citation rather than amend Part I to exempt 'self-evident' currency mechanics -- reward_terms Sec 11.1(a) + FAQ 12/14 found and cited (both entities now carry _source: \"reward_terms\")."
   ],
 
   "_review_findings": {
@@ -212,9 +215,16 @@
       "reasoning": "Three converging points, not one direct quote: (1) the MITC's own fee entry explicitly defers to 'the individual product Terms & Conditions' for applicability -- i.e. it points AT reward_terms Sec 11 to settle this, not at itself. (2) Sec 11 is unusually thorough (forfeiture events, timing, caps, minimum-txn threshold, rounding) yet never once mentions this fee, despite being exactly the kind of clause it would state if it applied. (3) FAQ 14 directly answers 'what do I have to do to receive cashback' with 'nothing -- automatic' -- a REDEMPTION fee presupposes an active redemption choice (typically: converting points into one of several catalog options -- merchandise, voucher, or statement credit), which CASHBACK's mechanism doesn't have at all; there is no catalog, no choice, nothing to redeem FROM. Sec 11.5(f) does use 'redeemed' once, for the narrow voluntary-closure edge case, but attaches no fee to it either. Net: the Rs.99 fee reads as aimed at SBI's POINTS-based cards (which the same MITC page separately notes have a 24-month Reward Point expiry and a redemption catalog), not at CASHBACK's direct percentage rebate. This was an absence-plus-context inference, not a single sentence saying 'CASHBACK is exempt' -- Claude proposed it, Satya reviewed and approved. No entity in this bundle models this fee (correctly, since it doesn't apply) -- the approval is recorded here rather than on a bundle field, since there's no field to attach it to."
     },
     "checklist_item_7_currency_route_provenance": {
-      "verdict": "NEW -- found mechanically by compute/ingest's `ingest lint`, not by any prior manual review pass, pending Satya's decision",
-      "finding": "`ingest lint ingestion/bundle_sbi_cashback.json` flags currencies[0] (cashback_inr) and currencies[0].routes[0] (statement_credit) as having no source citation at all -- the FIRST provenance gap this bundle's own repeated manual review (items 1-6 above) never caught. Confirms the value of building the tool: every earlier pass was a human (or Claude) reading the bundle top-to-bottom and could miss an entity; a mechanical per-entity check can't.",
-      "open_question": "Is a 1:1 statement-credit ratio (cashback denominated directly in rupees, v=1 by construction) the kind of fact Part I SS I.0 actually means to require sourcing for, or is 'this currency literally IS rupees' self-evident enough not to need a citation the way a transfer ratio or a reward rate does? Not resolved here -- either answer is defensible, and picking one silently would be exactly the kind of guess SS I.0 exists to prevent."
+      "verdict": "RESOLVED 2026-08-31 -- Satya chose 'require a citation, find one' over amending Part I; citation found and applied",
+      "finding": "`ingest lint ingestion/bundle_sbi_cashback.json` flagged currencies[0] (cashback_inr) and currencies[0].routes[0] (statement_credit) as having no source citation at all -- the FIRST provenance gap this bundle's own repeated manual review (items 1-6 above) never caught. Confirmed the value of building the tool: every earlier pass was a human (or Claude) reading the bundle top-to-bottom and could miss an entity; a mechanical per-entity check can't.",
+      "resolution": "Fetched and read reward_terms in full again (via pdftotext, the earlier WebFetch pass on this same URL returned a garbled/unparseable summary -- extracted the raw PDF text directly instead of trusting a lossy intermediate summary).",
+      "quotes": [
+        "reward_terms Sec 11.1(a): \"Card Cashback earned on such SBI Card is directly credited to the SBI Card account within two working days of the statement generation.\"",
+        "reward_terms FAQ 12 (worked example): \"An online transaction posted on 10th June of `40,000 would be eligible for a Card Cashback of 5% i.e. `2,000 ...\"",
+        "reward_terms FAQ 14: \"The Card Cashback will be automatically credited to your SBI Card account and will reflect in your monthly statement.\""
+      ],
+      "reasoning": "Sec 11.1(a)'s 'directly credited to the SBI Card account' establishes the statement_credit route_type (no redemption catalog, no separate claim step -- matches FAQ 14's 'will reflect in your monthly statement'). FAQ 12's worked example computes cashback as a straight percentage of a rupee spend amount, yielding a rupee cashback figure with no unit conversion anywhere -- establishes ratio=1.0. Corroborating absence-of-evidence: the ONLY 'reward points' mention anywhere in Section 11 (11.1(n)) is explicitly about a DIFFERENT SBI card variant a cardholder might be flipping FROM ('reward points accrued... on such variant would expire... prior to transferring... to CASHBACK SBI Card') -- CASHBACK's own mechanism is never described in points terms anywhere in the 47pp document, consistent with v=1 direct-rupee cashback, not a redemption-rate currency.",
+      "source": "reward_terms, Sec 11.1(a) + FAQ 12 + FAQ 14 -- both currencies[0] and currencies[0].routes[0] now carry _source: \"reward_terms\""
     }
   }
 }

@@ -174,6 +174,21 @@ def test_unsupported_selector_field_raises():
         match_segment(_segment("travel"), (bad_rule,))
 
 
+def test_txn_threshold_selector_is_accepted_but_unenforced_and_flagged():
+    """Phase 5 Task A (docs/DECISIONS.md #130): txn_min/txn_max no longer
+    raise on an earning-rule selector, but category mode still has no
+    per-transaction data to test them against -- the rule must bind every
+    matching segment regardless (not silently filter), flagged instead.
+    Task B's fuel-surcharge-waiver-as-capped-earning-rule is the reason
+    this needed to land on match.py's Selector, not just eligibility.py's
+    ExclusionSelector."""
+    rule = EarningRule(key="fuel_waiver_refund", selector=Selector(categories=("fuel",), txn_min=Decimal("500"), txn_max=Decimal("3000")), priority=10)
+    bindings = match_segment(_segment("fuel"), (rule,))
+    assert len(bindings) == 1
+    assert bindings[0].rule_key == "fuel_waiver_refund"  # not filtered out
+    assert bindings[0].flags == ("txn_threshold_unenforced",)
+
+
 def test_geography_selector_matches_segments_own_geography():
     domestic_only = EarningRule(key="dom", selector=Selector(geography="domestic"), priority=10)
     intl_only = EarningRule(key="intl", selector=Selector(geography="international"), priority=10)

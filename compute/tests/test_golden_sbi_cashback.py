@@ -25,23 +25,39 @@ see `_adapt_ingestion_bundle` below.
 
 - `exclusions[]` (`cashback_mcc_exclusions` using `mcc_include`,
   `min_txn_100` using `txn_max`) uses selector fields Part C itself
-  defines -- correctly named, just not yet evaluable by `engine/
-  eligibility.py` (Stage 2 only supports categories/channels/
-  merchant_group/geography). Worse than merely unsupported:
-  `_exclusion_selector_from_dict` silently drops these fields, producing
-  an all-`None` `ExclusionSelector` that `_selector_matches` treats as
-  MATCHES EVERYTHING -- loading `exclusions[]` as-is would zero out ALL
-  cashback (`excluded_from: ["rewards"]`), not just the intended
-  fuel/rent/sub-Rs100 spend. `_adapt_ingestion_bundle` still drops this
-  array explicitly; confirmed inert for both scenarios below regardless
-  (neither touches an MCC-excluded category).
-- `surcharges[0].waiver` (the 1% fuel-surcharge refund) has no field on
-  `engine.costs.Surcharge` at all -- per the `syn_fuel` precedent
-  (docs/DECISIONS.md #26) it needs to become a separate capped
-  earning_rule, not a sub-object. Left in the bundle file (informational,
-  flagged, not yet modelled); harmless to load since `bundle_from_dict`
-  simply ignores the extra `waiver` key the same way it ignores `_note`/
-  `_source`. Inert for both scenarios (neither touches fuel spend).
+  defines. AS OF PHASE 5 TASK A (docs/DECISIONS.md #130) both fields are
+  now engine-supported -- `mcc_include`/`mcc_exclude` via a registry
+  category->MCC map (`engine.normalise.DEFAULT_CATEGORY_MCC_MAP`, itself
+  transcribed from this same bundle's own sourced MCC table) and
+  `txn_min`/`txn_max` as accepted-but-unenforced-and-flagged. Manually
+  re-running `evaluate_card` on the FULL bundle (exclusions included)
+  confirms fuel is correctly zeroed and grocery/ecommerce spend is
+  untouched -- the historical bug this section used to describe
+  (`_exclusion_selector_from_dict` silently dropping these fields,
+  producing an all-`None` `ExclusionSelector` that matched EVERYTHING) is
+  fixed and stays fixed (goldens/golden_mcc_gate_standalone.json is that
+  fix's own regression gate). `_adapt_ingestion_bundle` STILL drops this
+  array below, but now for a narrower, purely cosmetic reason: neither
+  scenario touches an MCC-excluded category or a sub-Rs100 ticket, so
+  loading the real exclusions[] would be provably inert here either way,
+  and dropping it keeps this file's stage-by-stage numbers exactly as
+  they were before this task (no re-approval needed for a golden that
+  was already reviewed). Not evidence of a remaining gap.
+- `surcharges[0].waiver` (the 1% fuel-surcharge refund). AS OF PHASE 5
+  TASK B (docs/DECISIONS.md #131/#132) this IS now consumed --
+  `engine.costs.Surcharge` gained a `waiver: SurchargeWaiver | None`
+  field, computed directly in `surcharge_cost()` against the surcharge's
+  own raw matched spend. NOT the `syn_fuel` earning_rule precedent
+  (docs/DECISIONS.md #26) -- tried first, confirmed empirically inert for
+  THIS card specifically: `cashback_mcc_exclusions` already strips ALL
+  fuel spend out of Stage 2's "rewards" view, so a refund-shaped
+  earning_rule (which can only ever see `eligible.reward`) would compute
+  Rs0 regardless of how its selector is written. Manually re-running
+  `evaluate_card` on the full bundle (Rs8,000/month fuel spend) confirms
+  the waiver correctly nets the surcharge to Rs0 (`goldens/
+  golden_mcc_gate_standalone.json`-style live check, not re-added to this
+  file's own two scenarios below since neither touches fuel spend --
+  still inert for THESE scenarios, just no longer unmodelled in general).
 
 Scenario A (SBI's own PDF-published worked example, expected Rs1,350)
 depends on excluding EMI-converted spend, which has no representation
@@ -102,8 +118,8 @@ def test_ingestion_bundle_loads_without_crashing():
     """Confirms the (now nearly-direct) load is complete and correct."""
     bundle, currencies = _bundle_and_currencies()
     assert bundle.card_key == "cashback_sbi"
-    assert bundle.currency_key == "cashback_inr"
-    assert "cashback_inr" in currencies
+    assert bundle.currency_key == "sbi_cashback_inr"
+    assert "sbi_cashback_inr" in currencies
     assert {r.key for r in bundle.earning_rules} == {"online_5pct", "offline_1pct"}
     assert len(bundle.thresholds) == 1
     assert bundle.exclusions == ()  # dropped this run -- see module docstring
@@ -169,3 +185,63 @@ def test_scenario_b_steady_state_annual():
     assert result.fee_steady == Decimal(str(expected["fee_paid"]))
     assert result.nacv.steady_state == Decimal(str(expected["nacv_steady_state"]))
     assert result.nacv.year_1 == Decimal(str(expected["nacv_year_1"]))
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task B (docs/DECISIONS.md #131/#132): the real fuel-surcharge-
+# waiver economics, now expressible via engine.costs.Surcharge.waiver.
+# Not part of golden_sbi_cashback.json's own two scenarios (neither touches
+# fuel spend) -- these are new, hand-computed against the bundle's real,
+# already-sourced-and-reviewed numbers (1% surcharge, 1% waiver, capped
+# Rs100/statement-cycle, T&C 13.1 + FAQ 17).
+# ---------------------------------------------------------------------------
+
+def test_fuel_surcharge_waiver_nets_to_zero_within_the_cap():
+    from engine.costs import surcharge_cost
+
+    bundle, _currencies = _bundle_and_currencies()
+    assert len(bundle.surcharges) == 1
+    assert bundle.surcharges[0].waiver is not None
+
+    spend = SpendInput(category_spend=(CategorySpend(category="fuel", annual_amount=Decimal("96000")),))  # Rs8,000/month
+    normalised = normalise(spend, AssumptionsSnapshot())
+
+    result = surcharge_cost(normalised.segments, bundle.surcharges)
+    # gross/month = 0.01*1.18*8000 = 94.40; waived_base/month = min(0.01*8000, 100) = 80.00 (under the Rs100 cap);
+    # waived/month = 80.00*1.18 = 94.40 -> net/month = 0 -> annual = Rs0.
+    assert result.total == Decimal("0")
+    assert "txn_threshold_unenforced" in result.flags  # the 500-3000 txn band is accepted, not enforced
+
+
+def test_fuel_surcharge_waiver_caps_and_leaves_a_residual_annually():
+    from engine.costs import surcharge_cost
+
+    bundle, _currencies = _bundle_and_currencies()
+
+    spend = SpendInput(category_spend=(CategorySpend(category="fuel", annual_amount=Decimal("240000")),))  # Rs20,000/month
+    normalised = normalise(spend, AssumptionsSnapshot())
+
+    result = surcharge_cost(normalised.segments, bundle.surcharges)
+    # gross/month = 0.01*1.18*20000 = 236.00; waived_base/month = min(0.01*20000, 100) = 100.00 (cap BINDS);
+    # waived/month = 100.00*1.18 = 118.00 -> net/month = 236.00-118.00 = 118.00 -> annual = 118.00*12 = Rs1,416.00.
+    assert result.total == Decimal("1416.00")
+
+
+def test_fuel_surcharge_waiver_flows_through_evaluate_card_nacv():
+    """Cross-check: the consolidated orchestrator must agree with the
+    stage-level surcharge_cost() numbers above -- same discipline as
+    scenario B's own cross-check further up this file."""
+    bundle, currencies = _bundle_and_currencies()
+    spend = SpendInput(category_spend=(CategorySpend(category="fuel", annual_amount=Decimal("240000")),))  # Rs20,000/month, no channel
+
+    result = evaluate_card(bundle, currencies, spend, EvaluateAssumptions())
+    # gross_reward_value is 0 because this spend has no channel set, and
+    # both of CASHBACK's earning rules match by channel (online/pos/
+    # contactless) -- NOT because of cashback_mcc_exclusions, which
+    # _adapt_ingestion_bundle drops in this fixture (see module docstring).
+    assert result.gross_reward_value == Decimal("0")
+    # Rs2,40,000 of (unexcluded, in this fixture) spend clears the
+    # Rs2,00,000 waiver threshold, so the annual fee is waived too --
+    # NACV is purely the negative surcharge cost computed above.
+    assert result.waiver_achieved is True
+    assert result.nacv.steady_state == Decimal("-1416.00")

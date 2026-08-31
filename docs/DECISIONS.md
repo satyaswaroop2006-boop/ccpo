@@ -3141,3 +3141,822 @@ link` (writes `sources`/card rows/`source_links` to Postgres, `status=
 'draft'`) -- the first `compute/` code in this repo that touches the
 catalog tables via anything other than `seeds/seed.py`'s synthetic
 fixtures.
+
+## Phase 5 Task A -- MCC / transaction-value exclusion selector support
+
+### 130. mcc_include/mcc_exclude/txn_min/txn_max: what landed, what didn't,
+and why the two selector types (ExclusionSelector vs match.Selector)
+ended up with genuinely different semantics, not a shared one
+
+**The blocking design question, asked of Satya before writing any code**:
+Part C says category-mode MCC matching should use "the category->MCC
+mapping in the assumptions registry", but that registry didn't exist,
+and the engine's 15 categories don't cover what CASHBACK SBI's own real
+`mcc_include` exclusion list needs (wallet, jewelry, gift/novelty,
+railways, member-FI/quasi-cash, digital gaming, tolls, government --
+none of which map onto grocery/dining/fuel/etc). Three options were
+posed: (a) add the minimal new category vocabulary the real list needs,
+then build the registry; (b) defer mcc_include/exclude entirely this
+task, ship only txn_min/txn_max; (c) push the MCC->category mapping to
+each ingestion bundle instead of a global registry. **Satya chose (a).**
+
+**What was built, engine/normalise.py**: 8 new categories (`wallet`,
+`jewelry`, `gift_novelty`, `railways`, `quasi_cash`, `digital_gaming`,
+`tolls`, `government`) added to `DEFAULT_TICKET_SIZES` with rough
+estimate ticket sizes -- same "needs Satya's sign-off" status as every
+other entry in that table, not yet confirmed. `DEFAULT_CATEGORY_MCC_MAP`
+(new registry dict, `AssumptionsSnapshot.category_mcc_map`) populated for
+13 categories (the 8 new ones plus fuel/rent/education/utilities/
+insurance) using the EXACT MCC codes already sourced and reviewed in
+`compute/ingestion/bundle_sbi_cashback.json`'s `cashback_mcc_exclusions`
+selector (itself from CASHBACK SBI's reward_terms Sec 11.1(d) table) --
+not invented from memory (CLAUDE.md rule 4 is about real card REWARD
+data; MCC<->merchant-category assignment is a generic external standard,
+but it's nonetheless drawn from one real source and needs Satya's
+confirmation before any real card publish relies on it). Categories with
+no known MCCs map to `()` -- an mcc_include/mcc_exclude selector naming
+an unmapped category matches nothing, the safe direction, never a guess.
+
+**engine/eligibility.py (ExclusionSelector, Stage 2)** -- the path
+CASHBACK actually needs, so this got full support:
+- `mcc_include`/`mcc_exclude`: segment's category is looked up in
+  `category_mcc_map`; a selector matches on set-intersection with the
+  looked-up MCC set (not a real per-transaction MCC, which category mode
+  never has). Flagged `mcc_category_estimated`.
+- `txn_min`/`txn_max`: accepted, but a selector naming either field
+  **never matches**, full stop -- discovered via a failing self-authored
+  test, not designed in up front. The first attempt ("ignore the txn
+  field, evaluate everything else") silently reintroduced #111's exact
+  failure mode: SBI's real `min_txn_100` exclusion selector is *just*
+  `{txn_max: 100}`, no other field -- "ignore it" meant "no field
+  restricts anything" meant "matches every segment" meant "zeroes ALL
+  reward," the same catastrophe the mcc fix was built to prevent, just
+  through a different field. The only safe reading when a transaction-
+  level condition can't be verified is "this exclusion never fires in
+  category mode" -- which matches Satya's own prior approval of
+  min_txn_100 ("category-mode value will slightly overstate --
+  acceptable, flagged", `_review_checklist` item 5). Flagged
+  `txn_threshold_unenforced`. `EligibleSpend` gained a `flags` field to
+  carry both; `evaluate_card` folds them into its own result flags.
+- `_UNSUPPORTED_SELECTOR_FIELDS` narrowed to `merchants`/`networks`/
+  `date_from`/`date_to` -- genuinely still unsupported, not touched.
+
+**engine/match.py (Selector, Stage 3, earning rules)** -- deliberately
+scoped down from the handoff's "then earning-rule selectors if cheap in
+the same pass": `mcc_include`/`mcc_exclude` were NOT extended here (no
+earning rule in any bundle needs it yet; threading `category_mcc_map`
+through this module's other callers -- caps.py/thresholds.py/costs.py,
+several different selector contexts -- is a separate, larger increment
+than "cheap" covers). `txn_min`/`txn_max` WERE added here too (Task B's
+planned fuel-surcharge-waiver-as-capped-earning-rule needs it), but with
+the OPPOSITE resolution from eligibility.py on purpose: the field is
+IGNORED for matching (rule binds on its other fields as if the txn bound
+weren't there), flagged `txn_threshold_unenforced` on the binding, not
+forced to never-match. Reasoning: for an earning rule, ignoring the txn
+bound means *over-crediting* reward on transactions outside the true
+band -- bounded in practice by whatever cap the rule already carries
+(exactly syn_fuel's `cap_refund` shape) -- not the "zero every reward"
+blast radius an over-matching EXCLUSION has. Making an earning-rule
+selector never-match whenever it names a txn bound would make the field
+useless to ever set on a rule (Task B's whole point). The two modules
+needed genuinely different defaults, not a shared one -- documented in
+both modules' docstrings so a future reader doesn't try to unify them.
+
+**ingest lint**: no code changes needed -- `lint.py` calls the engine's
+own validators directly, so `mcc_include`/`txn_max` flipped from
+rejected to accepted automatically once support landed. Confirmed live:
+`python -m ingest lint ingestion/bundle_sbi_cashback.json` now reports 2
+errors (both provenance, item 129's still-open currency/route gap), down
+from 4 -- the two `engine_compatibility` errors on `cashback_mcc_
+exclusions`/`min_txn_100` are gone.
+`tests/test_ingest_lint.py::test_lint_bundle_against_real_sbi_bundle_
+matches_known_findings` updated to lock in 2, not 4 -- an intended
+reject->accept flip, not a regression.
+
+### Regression gate
+
+`goldens/golden_mcc_gate_standalone.json` + `tests/test_golden_mcc_gate.
+py`: a hand-built card (NOT added to `seeds/synthetic_cards.py`'s CARDS
+-- a 13th entry would ripple into every hardcoded "12 cards" assumption
+in the optimiser/seed tests, out of scope for an engine-mechanism proof;
+same standalone pattern `bundle_sbi_cashback.json`/`golden_sbi_cashback.
+json` already established) with one exclusion, `mcc_include=[5541,
+5542]` (a strict SUBSET of fuel's 4 mapped MCCs, chosen deliberately to
+prove set-intersection matching, not exact-set-equality). Proves,
+stage-by-stage AND via the `evaluate_card` orchestrator: fuel spend
+(Rs96,000) earns exactly Rs0 reward while still counting toward
+milestone/waiver views (`excluded_from=["rewards"]` only); grocery spend
+(untouched, unmapped category) earns its full Rs2,400 undisturbed --
+i.e. the fix is proven to exclude ONLY what it should, not "everything"
+(the pre-fix #111 failure mode) and not "nothing" (a no-op fix).
+Filename deliberately does NOT start with `golden_syn_` -- `tests/
+test_evaluate_orchestrator.py` globs `golden_syn_*.json` and assumes
+every match's `card` field is a `CARDS` lookup key, which this file's
+embedded card dict is not.
+
+Also live-verified against the real bundle (not just synthetically):
+running `evaluate_card` on the FULL `bundle_sbi_cashback.json` (exclusions
+included, previously stripped by every test touching it) with a
+grocery+fuel spend mix produced `gross_reward_value=6000.00` (grocery's
+5% online rate only) and `flags=('mcc_category_estimated',
+'txn_threshold_unenforced')` -- fuel correctly contributes zero. `tests/
+test_golden_sbi_cashback.py`'s own scenario B still artificially drops
+`exclusions[]` (unchanged behaviour), but its docstring was corrected --
+neither scenario touches an MCC-excluded category or a sub-Rs100 ticket,
+so this was already provably inert, not a remaining engine gap being
+worked around.
+
+Unit-level coverage (`tests/test_eligibility.py`, `tests/test_match.py`):
+mcc_include matches only the mapped category; mcc_exclude is confirmed
+as the opposite polarity (blacklist, not whitelist); a selector with NO
+`category_mcc_map` supplied matches nothing (not everything -- the
+direct #111 regression check); the txn_threshold_unenforced flag fires
+on both `apply_eligibility` and `match_segment` without altering which
+segments/rules match.
+
+Full suite: 302/302 green + 1 skipped (294 prior + 3 new golden tests +
+4 new eligibility unit tests + 1 new match unit test), after updating 3
+existing tests whose fixtures used fields that flipped from
+reject to accept (`tests/test_eligibility.py`,
+`tests/test_card_bundle.py`, `tests/test_ingest_lint.py`).
+
+Task B (fuel-surcharge-waiver as a capped earning rule, resolves #110)
+is next -- it depends on match.py's new txn_min/txn_max support landing
+first, which it now has.
+
+## Phase 5 Task B -- fuel-surcharge-waiver as a capped earning rule (resolves #110)
+
+### 131. Found before writing any waiver code: surcharges/forex were
+computed against the REWARD-eligible spend view, not raw spend -- a
+latent bug, confirmed against Part A's own formulas, never fired by any
+existing card
+
+`engine/evaluate.py`'s Stage 10 fed `surcharge_cost`/`international_
+spend_total` `eligible.reward` (Stage 2's reward-eligibility view), not
+`normalised.segments` (the raw Stage 1 grid). Part A SS A.10/A.11's own
+formulas -- `ForexCost(c) = m(c).(1+g).Sum x(c,intl,t)`, `SurchargeCost(c)
+= Sum sigma(c,k).(1+g_sigma).x(c,k,t)` -- tie both costs to `x`, total
+category/geography spend, with no reference to reward eligibility
+anywhere; A.10 says explicitly "international spend ALSO earns rewards
+through the normal machinery" (independent lines, not one gating the
+other). Confirmed as a real bug, not a stylistic preference, by trying to
+build CASHBACK SBI's fuel-surcharge-waiver (needs to net the surcharge
+against ALL fuel spend, but fuel is also fully excluded from `eligible.
+reward` by `cashback_mcc_exclusions` -- under the old wiring, the
+surcharge itself would ALSO have silently computed to Rs0, i.e. the bank
+would appear to charge no fuel surcharge at all, which is false).
+
+Never fired against any of the 12 synthetic cards or any existing golden
+because no card combines a surcharge/international selector with a
+reward exclusion on the same category (`syn_fuel` has surcharges but zero
+exclusions; `syn_upi`/`syn_waiver` have exclusions but no surcharges) --
+`eligible.reward == normalised.segments` for every one of them regardless
+of which view Stage 10 reads, so switching the input was byte-identical
+across the entire existing battery (verified: full suite green,
+unchanged expected values, both `test_goldens.py::test_golden_syn_fuel_
+surcharge` and `test_golden_syn_travel_forex`'s own manual stage
+reproductions updated to read `normalised.segments` too, for the same
+reason -- keeping them a faithful mirror of the real pipeline, not just
+numerically coincidental with it).
+
+### 132. The syn_fuel earning-rule pattern is empirically inert for
+CASHBACK SBI's own fuel waiver -- found by building it and running the
+number, not by inspection; asked Satya rather than picking a workaround
+
+Task B's own instructions said: model the waiver as an ordinary capped
+`earning_rule`, no new schema object, exactly the `syn_fuel`/C.9 Example
+10 precedent (#26). Built it exactly as specified against a copy of the
+real bundle (`categories:[fuel], txn_min:500, txn_max:3000`, capped
+`Rs100/statement_cycle`) and ran `evaluate_card` on Rs1,20,000 of fuel
+spend: **`gross_reward_value = 0`**. Root cause, confirmed by reading the
+pipeline, not guessed: Stage 3 (`match`) only ever binds earning rules
+against Stage 2's `eligible.reward` output; CASHBACK's own `cashback_mcc_
+exclusions` already strips 100% of fuel spend out of that view (`excluded
+_from: ["rewards"]`), so ANY earning rule -- no matter its own selector --
+can never see a fuel segment on this card. `syn_fuel` itself never
+surfaced this because it has zero exclusions; this is exactly the kind of
+interaction a synthetic fixture with no competing exclusion can't
+expose, and the combination (surcharged category ALSO reward-excluded)
+is actually the *typical* real-world shape for Indian cashback cards, not
+an edge case -- most exclude fuel from cashback while still waiving the
+surcharge.
+
+Per CLAUDE.md ("if the spec seems wrong, stop and ask Satya, log the
+decision") this was surfaced as a blocking question rather than silently
+picked, with three options: (a) give `Surcharge` a new `waiver` field,
+computed directly in `costs.py` against the surcharge's own raw matched
+spend, sidestepping Stage 2's reward mask entirely; (b) a general new
+4th eligibility mask / per-rule exemption mechanism in Stage 2, so
+earning rules can opt out of a reward exclusion; (c) ship the earning_
+rule pattern as literally specified, document that it computes Rs0 for
+CASHBACK today, defer the real fix. **Satya chose (a).**
+
+**Implementation** (`engine/costs.py`): new `SurchargeWaiver` dataclass
+(`rate`, `cap_amount`, `cap_window`, optional `txn_min`/`txn_max`) and
+`Surcharge.waiver: SurchargeWaiver | None`. `surcharge_cost()` now
+computes, per surcharge, the window-instance-pooled waived amount (reusing
+`caps.py`'s `window_instances`/`window_flags` -- the same per-instance-
+reset, not annually-pooled, semantics an ordinary reward cap already has)
+capped at `cap_amount` PRE-GST, nets it against the gross surcharge (GST
+applied to the waived amount the same way it's applied to the surcharge
+itself), floored at Rs0 (a waiver can reduce a surcharge to zero, never
+turn it into a rebate elsewhere). `txn_min`/`txn_max` on the waiver are
+accepted but unenforced in category mode -- identical posture to Phase 5
+Task A, flagged `txn_threshold_unenforced` rather than approximating
+which slice of spend would really qualify (a bounded, cap-limited
+approximation, not the "matches everything" danger class Task A's own
+fix addressed). `surcharge_cost()`'s return type changed from a bare
+`Decimal` to `SurchargeCostResult(total, flags)` so this flag (and
+`cycle_approximated`, already existing) can reach `evaluate_card`'s own
+result -- the 3 other real call sites (`evaluate.py`, `tests/test_costs.
+py`, `tests/test_goldens.py`) updated accordingly.
+
+`cap_amount`'s GST treatment (pre-GST base vs GST-inclusive) is NOT
+sourced either way from the real bundle's T&C text -- called out
+explicitly as an assumption in `SurchargeWaiver`'s own docstring, same
+"needs confirmation before a real publish" status as any other
+assumption-registry default, not silently picked as fact.
+
+**`engine/card_bundle.py`**: `_surcharge_waiver_from_dict` added; the
+real bundle's `surcharges[0].waiver` sub-object needed ZERO renaming --
+its field names (`rate`/`txn_min`/`txn_max`/`cap_amount`/`cap_window`)
+were already drafted, before this loader existed, directly against Part
+A SS A.11's prose, and happen to match `SurchargeWaiver` exactly.
+
+### Verification
+
+`tests/test_costs.py`: 5 new tests -- full waiver under the cap zeroes
+the surcharge (Rs8,000/mo fuel, hand-computed to Rs0); waiver caps and
+leaves a residual (Rs20,000/mo, hand-computed to Rs118.00/mo); the cap
+resets every window instance rather than pooling annually (Rs20,000/mo
+x 12 -> Rs1,416.00/yr, not a single Rs100 cap for the whole year); the
+txn bound is accepted-but-unenforced-and-flagged; a waiver rate exceeding
+the surcharge's own rate raises. `tests/test_golden_sbi_cashback.py`: 3
+new tests against the REAL, already-reviewed CASHBACK bundle (not a
+synthetic stand-in) -- the same Rs8,000/Rs20,000-per-month hand
+computations run through `bundle_from_dict`'s real `Surcharge.waiver`
+and through the full `evaluate_card` orchestrator, confirming
+`nacv.steady_state == -1416.00` for the Rs20,000/month case (gross
+reward Rs0 -- no channel set on the spend, unrelated to the waiver;
+waiver threshold cleared in this fixture since `_adapt_ingestion_bundle`
+still drops `exclusions[]`, same reason as before). `python -m ingest
+lint ingestion/bundle_sbi_cashback.json` re-run: still exactly the same
+2 provenance errors as before this task, confirming the waiver change
+introduced no new engine-compatibility issue. `syn_fuel`'s own golden
+(`test_golden_syn_fuel_surcharge`) reruns unchanged, confirming the
+earning-rule precedent still stands for cards where it isn't blocked by
+a competing reward exclusion -- Task B doesn't retire that pattern, it
+adds the second one CASHBACK actually needs.
+
+Full suite: 310/310 green + 1 skipped (302 prior + 5 costs tests + 3
+sbi-cashback tests), including the Problem-1 raw-spend fix verified
+byte-identical across the entire pre-existing battery.
+
+CASHBACK SBI's real fuel-surcharge economics are now fully and correctly
+modelled (waiver nets the surcharge, MCC exclusion still zeroes cashback
+on fuel, both independently correct) -- no CASHBACK publish yet
+(`ingest link` hasn't been built), but every engine-side blocker Phase 5's
+handoff named for real-card ingestion (MCC/txn selectors, fuel-surcharge
+waivers) is now resolved.
+
+## Phase 5 -- `ingest link` (Part I SS I.4 LINK stage / SS I.9's tool spec)
+
+### 133. Schema didn't have anywhere to put Task B's `Surcharge.waiver` --
+found trying to write the FIRST insert, not by re-reading the schema
+proactively
+
+`supabase/migrations/0001_init.sql`'s `surcharges` table predates Phase 5
+Task B entirely (Task B was an engine-only change; nothing in it touched
+the schema). Confirmed against the live database directly, not assumed
+from reading the migration file: `surcharges` had exactly `id,
+card_version_id, key, selector, rate, gst_on_surcharge` -- no column for
+`SurchargeWaiver`. New migration `0002_surcharge_waiver.sql`: one
+additive, nullable `waiver jsonb` column, per Part D SS D.3's own stated
+pattern ("each lands as an additive migration; nothing in 0001_init.sql
+needs rework"). Every existing seeded row (only `syn_fuel` has a
+surcharge, and it has no waiver -- its refund is the OTHER pattern, a
+separate earning_rule) reads back `NULL`, unchanged behaviour.
+
+**Applied to the live Supabase database** -- asked first (Claude Code's
+own permission classifier independently blocked the unprompted attempt,
+which validated the instinct to ask rather than just run DDL against
+shared infrastructure); Satya approved. `app/repository.py`'s
+`PostgresCardRepository` and `seeds/seed.py` both updated to read/write
+the new column (neither is exercised by any card with a waiver yet, but
+both would have silently dropped one the moment a real card needed it --
+same "don't let a real capability silently regress through an
+unmaintained read/write path" instinct as Phase 5 Task A's card_bundle.py
+fix).
+
+### 134. Three blocking design questions found by actually trying to
+link CASHBACK SBI's real bundle, not by re-reading Part I -- asked
+Satya before writing `ingest/link.py`
+
+**Issuer resolution.** CASHBACK's bundle has only `issuer_key: "sbi_
+card"` -- no name, no `issuer_type`. `cards.issuer_id` requires an
+existing `issuers` row, and `issuer_type` (bank/nbfc/network_issuer) is
+exactly the kind of real, sourced fact Part I SS I.3 says should never be
+guessed (SBI Card is, as it happens, an NBFC subsidiary of State Bank of
+India, not a bank in the strict RBI sense -- precisely the sort of fact
+that's easy to get wrong from memory, which is the whole argument for not
+trying). Part I never specifies who creates an `issuers` row at all --
+confirmed absent by search, not assumed. Asked Satya: require the issuer
+to pre-exist (refuse loudly, naming what's missing) vs. extend the bundle
+format with an inline `issuers` block. **Satya chose: require it to
+pre-exist** -- issuer creation is a separate, simpler one-time step,
+treated like a stable reference table cards hang off of, not re-derived
+per bundle. `ingest/link.py::_find_issuer_id` implements exactly this.
+
+**Currency key collision.** `reward_currencies.key` is GLOBALLY unique
+(confirmed against the live database's actual constraint, `reward_
+currencies_key_key`) -- not scoped per issuer despite Part D's table map
+nesting currencies under issuers visually. CASHBACK's bundle wants
+`cashback_inr`, which already exists, owned by the SYNTHETIC test
+issuer (`synthetic_bank`). Asked Satya: reuse the existing row across
+issuers (economically harmless for a v=1 statement-credit currency) vs.
+require real bundles to use issuer-scoped keys, keeping real card data
+structurally isolated from synthetic test fixtures. **Satya chose:
+issuer-scoped keys** -- `ingest link` now actively refuses (rather than
+silently reusing, or crashing on a raw constraint violation) whenever a
+bundle's currency key already belongs to a DIFFERENT issuer, naming the
+conflict. CASHBACK's own bundle still needs an edit (e.g. `sbi_
+cashback_inr`) before it can link -- not done this pass, since editing an
+already-reviewed real bundle's field is itself an ingestion action, not
+tooling work.
+
+**`source_links.confidence` derivation.** Part I SS I.5 defines
+confidence as depending on BOTH the cited source's type AND whether the
+transcription itself needed interpretation -- the second half is a
+judgment call no bundle drafted so far records as an explicit field, and
+which a mechanical LINK step can't infer. Resolved (not really a fork,
+more a scoping clarification Satya confirmed): derive confidence
+mechanically from source_type alone (SS I.1's own weighting table --
+mitc/fee_schedule -> high, official_pdf/reward_terms/product_page/
+network_benefits/transfer_partner_doc -> medium, faq/third_party -> low),
+documented explicitly as a starting default a human reviewer can still
+adjust before publish (`ingest.bundle.default_confidence_for_source_
+type`). CASHBACK's still-open item -- whether a v=1 statement-credit
+currency needs its own citation at all (#129) -- Satya confirmed:
+**require a citation, find one** in `reward_terms`/`mitc` rather than
+amending Part I to exempt it. Not yet done this pass -- finding the exact
+supporting sentence is a DRAFT-stage research task (re-reading the source
+PDF), not `ingest link` tooling work; doing it hastily here risks
+guessing the citation, exactly what SS I.0 exists to prevent.
+
+### 135. A fourth, unprompted finding: CASHBACK's own `_sources` block
+has no `storage_path`/`captured_at`/`title` at all -- meaning, by SS
+I.1's own definition, it was never actually CAPTURED
+
+SS I.1: "A source with no snapshot is not yet captured -- a bare URL is a
+lead, not evidence." CASHBACK's `_sources.reward_terms`/`_sources.mitc`
+carry `url`/`source_type`/`snapshot_note` only -- no `storage_path`
+(nullable in the schema, so this doesn't fail any DB constraint or
+existing `ingest lint` check; `check_provenance_completeness` verifies
+that FIELDS cite a source, not that the SOURCE itself was properly
+snapshotted -- a genuinely different, not-yet-built check, same "state it
+explicitly rather than imply coverage" posture as `ingest lint`'s own
+`checks_not_implemented` list). Not fixed here -- building a new
+"source-capture completeness" lint check is a separate, scoped task of
+its own (parallel to how `ingest lint`'s original four C.11 checks were
+each named but deliberately left unbuilt), and retroactively snapshotting
+CASHBACK's two sources into Supabase Storage is a CAPTURE-stage action,
+not something `ingest link` does. Flagged here so it's visible before
+anyone assumes CASHBACK is publish-ready once the three items above are
+resolved -- it will not be, until this is too.
+
+### 136. Supabase's pooler doesn't support psycopg3's auto-prepared
+statements -- found by `ingest link`'s own repeated inserts, a
+pre-existing fragility in code that predates this task
+
+`ingest/link.py`'s per-entity `source_links` INSERT is the identical
+query text executed many times per bundle (once per (entity, source_ref)
+pair) -- across two test cards in one connection, crossed psycopg3's
+default auto-prepare threshold (5 identical query texts) and raised
+`psycopg.errors.DuplicatePreparedStatement`. Root cause: the DSN's port
+6543 is Supabase's PGBouncer in transaction-pooling mode, which doesn't
+preserve server-side prepared statements across the pooled backend
+connections it multiplexes -- a well-documented psycopg3/PGBouncer
+incompatibility, not a bug in this code's SQL. Fixed with `psycopg.
+connect(dsn, prepare_threshold=None)`, applied everywhere this project
+opens a connection (`app/repository.py::PostgresCardRepository`,
+`seeds/seed.py`, `ingest/cli.py`). This was a LATENT fragility in
+`PostgresCardRepository.get_all_card_bundles()` too (repeated identical
+SELECTs across 12+ cards) -- it happened not to cross the threshold in
+any existing test's call pattern, but would have under enough load or a
+larger catalog. Found by this task, fixed project-wide, not scoped to
+just the new code.
+
+### Verification
+
+`ingest/link.py` (new), `ingest/bundle.py` gained `ENTITY_TYPE_BY_LIST_
+KEY`/`default_confidence_for_source_type`, `ingest/cli.py` gained the
+`link` subcommand (`compute/.env` auto-loaded via `load_dotenv()`, same
+convenience `app/main.py` already has -- `seeds/seed.py` deliberately
+doesn't, per its own one-shot-infra-script framing, so this isn't a
+blanket change).
+
+`tests/test_ingest_link.py` (8 tests, new) -- the first `compute/` tests
+that WRITE to the shared live catalog database, not just read it. Every
+row uses a `zz_test_ingest_link_`-prefixed key, and a `conn` fixture
+cleans up before AND after each test (idempotent, FK-order-safe) so a
+prior interrupted run's debris never blocks a later one and a failing
+test never leaves the shared database dirty. Covers: happy-path insert
+(card/currency/route/earning_rule/source_links, all counts and
+`status='draft'`/`reviewer_status='unreviewed'` verified directly against
+the DB); LINT failure refuses and inserts nothing; missing issuer
+refuses; re-linking an existing card refuses without touching what's
+already there; a currency collision with a different issuer refuses;
+a currency/route already declared by an earlier card of the SAME issuer
+is reused, not duplicated, and doesn't get a redundant citation;
+sources dedupe by URL across cards while still producing one
+`source_links` row per citing entity; confidence derives correctly from
+source_type (`mitc` -> high, `faq` -> low). Also manually smoke-tested
+via the actual CLI (`python -m ingest link`) against a disposable bundle,
+confirmed inserted correctly, then cleaned up -- and against the REAL
+`bundle_sbi_cashback.json`, confirmed it correctly REFUSES today (2 lint
+errors still open), the expected, correct behaviour, not a bug.
+Post-test verification query against the live database confirms zero
+`zz_test_*`/`zz_cli_smoke_*` residue and the 12-card synthetic catalog
+count unchanged.
+
+Full suite: 318/318 green + 1 skipped (310 prior + 8 new ingest_link
+tests), including the two prepared-statement-fix call sites re-verified
+live (not just unit-tested) via the CLI smoke tests above.
+
+**What's still needed before CASHBACK SBI itself can actually be
+linked** (none of this is `ingest link` bugs -- all four are real-card
+data/process prerequisites #134/#135 named): (1) an `issuers` row for
+`sbi_card` with real, sourced `name`/`issuer_type`/`website`; (2) the
+bundle's `currency`/`currencies[].key` renamed off the colliding
+`cashback_inr` to something issuer-scoped; (3) ~~a real citation found in
+`reward_terms`/`mitc` for the currency/route (#129)~~ **done, see #137**;
+(4) the two sources properly captured (snapshotted into storage,
+`storage_path` set) per SS I.1, which nothing currently checks
+mechanically but SS I.1 requires in spirit. `ingest review-queue`/
+`ingest publish` (SS I.9's remaining two) are still unbuilt -- next
+slice, whenever it comes.
+
+### 137. #129 resolved: reward_terms Sec 11.1(a) + FAQ 12/14 establish
+the cashback_inr currency/route citation Satya asked for
+
+Satya's own decision on #129/#134 was "require a citation, find one" --
+this is that citation, found by actually re-reading the source, not
+inferred from the schema shape. First attempt (`WebFetch` on the
+`reward_terms` PDF URL) came back "corrupted or improperly encoded" --
+the tool's own small summarizer model couldn't parse it, NOT evidence the
+PDF itself is unreadable. Rather than accept a failed extraction as an
+answer, pulled the raw PDF `WebFetch` had already saved locally and ran
+`pdftotext -layout` on it directly (available via Git for Windows'
+bundled `mingw64/bin`, no new dependency installed) -- got clean,
+searchable full text. This mirrors CLAUDE.md's own instruction not to
+silently accept a bad tool result as a fact ("if you suspect... flag it")
+applied to "the tool failed" rather than "the tool returned something
+suspicious" -- same discipline, adjacent trigger.
+
+**Quotes, both from `reward_terms` (the source already authoritative for
+this card's reward mechanics -- `mitc` doesn't cover cashback at all,
+only fees/forex/waiver):**
+- Sec 11.1(a): *"Card Cashback earned on such SBI Card is directly
+  credited to the SBI Card account within two working days of the
+  statement generation."* -- establishes the `statement_credit` route
+  type: no redemption catalog, no separate claim step.
+- FAQ 12's worked example: *"An online transaction posted on 10th June of
+  Rs.40,000 would be eligible for a Card Cashback of 5% i.e. Rs.2,000..."*
+  -- cashback computed as a straight percentage of a rupee spend amount,
+  yielding a rupee cashback figure, no unit conversion anywhere --
+  establishes `ratio=1.0`.
+- FAQ 14 (already quoted elsewhere in this bundle for the Rs.99 fee
+  question, checklist item 6): *"The Card Cashback will be automatically
+  credited to your SBI Card account and will reflect in your monthly
+  statement."*
+
+**Corroborating absence-of-evidence, not just presence-of-evidence:**
+searched the full Section 11 text for every mention of "point" -- the
+ONLY hit (11.1(n)) is about a cardholder flipping FROM a DIFFERENT,
+points-based SBI card variant INTO CASHBACK ("reward points accrued...
+on such variant would expire... prior to transferring... to CASHBACK SBI
+Card") -- CASHBACK's own mechanism is never once described in points
+terms anywhere in the 47pp document. Consistent with v=1 direct-rupee
+cashback, not a redemption-rate currency; strengthens rather than merely
+fails to contradict the ratio=1.0 reading.
+
+**Applied**: both `currencies[0]` and `currencies[0].routes[0]` in
+`bundle_sbi_cashback.json` now carry `_source: "reward_terms"` with the
+quotes inline; `_review_checklist` item 7 and `_review_findings.
+checklist_item_7_currency_route_provenance` updated to record the
+resolution (verdict, quotes, reasoning) rather than leaving the open
+question standing. `python -m ingest lint ingestion/bundle_sbi_cashback.
+json` now reports **zero errors** -- down from the 2 remaining after
+Phase 5 Task A. `tests/test_ingest_lint.py::test_lint_bundle_against_
+real_sbi_bundle_matches_known_findings` updated to assert `report.passed
+is True` (was: exactly 2 provenance errors) -- the intended, tracked
+reject->accept flip, not a regression. Full suite: 318/318 green + 1
+skipped, unchanged count (this was a bundle-data + one test-assertion
+change, no engine/tooling code touched).
+
+Still NOT resolved (see #134/#135, unaffected by this entry): the
+`sbi_card` issuer row, the `cashback_inr` currency-key collision, and the
+missing source snapshots (`storage_path`). `ingest lint` passing cleanly
+is necessary but not sufficient for `ingest link` to succeed on this
+bundle -- LINK's own issuer/currency checks (#134) still apply and still
+correctly refuse today.
+
+### 138. `sbi_card` issuer row inserted -- `issuer_type` sourced, not
+guessed; a real, well-established fact, but harder to get a clean
+verbatim citation for than expected
+
+`issuer_type` has zero effect on any financial computation (`grep`-
+confirmed: nothing in `engine/`/`app/`/`optimiser/` ever reads it, and
+`source_links.entity_type`'s own CHECK constraint doesn't even include
+"issuer" as a citable entity type -- Part I's provenance regime was never
+built to cover issuer metadata at all). Even so, it's a real regulatory
+classification, not cosmetic, and CASHBACK SBI's own MITC never states it
+explicitly (checked: no "NBFC"/"Non-Banking"/"registered with" language
+anywhere in either already-captured source) -- SBI Cards and Payment
+Services Limited (SBICPSL) is, despite the "SBI" name and State Bank of
+India being its principal shareholder, NOT a bank in the schema's sense;
+it's an RBI-registered NBFC. Easy to get wrong from memory precisely
+because the name implies otherwise -- exactly the trap CLAUDE.md rule 4
+exists to prevent, applied here even though this field sits outside
+Part I's own citation machinery.
+
+Confirmed via Screener.in (a financial-data aggregator sourcing company
+classification from BSE/NSE filings, not a primary regulatory source
+itself -- flagged as a secondary source, not overstated as RBI's own
+registry): *"a non-deposit accepting systemically important nonbanking
+financial company registered with the RBI."* Legal name confirmed
+directly from the already-captured `mitc` document itself ("SBI Cards
+and Payment Services Limited", appearing verbatim at four separate
+points in that PDF) -- no new source needed for that part. Website/
+support URL from `sbicard.com`'s own site structure.
+
+Inserted directly (`key='sbi_card', name='SBI Cards and Payment Services
+Limited', issuer_type='nbfc', website='https://www.sbicard.com',
+support_url='https://www.sbicard.com/en/contact-us/personal.page'`) --
+a single-row insert into a table nothing else yet references, reversible,
+genuinely lower blast radius than #133's schema migration (which needed
+explicit sign-off first); done directly on Satya's explicit "insert the
+sbi_card issuer row" instruction. Verified: `ingest link` on the real
+bundle now progresses PAST the issuer check to the next already-
+documented blocker (#134's currency-key collision), confirming the gates
+compose correctly one at a time rather than masking each other.
+
+Also worth a passing methodological note: `WebFetch`'s own small
+summarizer model failed outright on both source PDFs when fetched
+directly ("corrupted or improperly encoded") -- both times the fix was
+pulling the raw file `WebFetch` had already saved locally and running
+`pdftotext -layout` on it (available via Git for Windows' bundled
+`mingw64/bin`, no new dependency needed), not accepting the failed
+summary as evidence the documents themselves were unreadable. Same
+pattern as #137.
+
+Remaining before CASHBACK can actually link: the `cashback_inr`
+currency-key rename (#134) and the source-snapshot gap (#135).
+
+### 139. Currency key renamed to `sbi_cashback_inr` -- and, as an
+UNPLANNED side effect of my own verification step, CASHBACK SBI got
+actually LINKED into the live database this same pass
+
+Renamed `cashback_inr` -> `sbi_cashback_inr` throughout `bundle_sbi_
+cashback.json` (top-level `currency`, `currencies[0].key`, both earning
+rules' `accrual.currency`) and the golden's own prose, per #134's
+resolution -- `ingest lint` still passes cleanly (0 errors) after the
+edit, confirming the rename didn't disturb anything provenance-related.
+
+**What I didn't intend to happen**: to confirm the rename actually
+cleared the currency-collision refusal, I ran `ingest link` against the
+real bundle again, expecting it to still refuse -- on the source-
+snapshot gap (#135), which I'd flagged as the next remaining blocker.
+It didn't refuse. Re-checked why: #135 was never an ENFORCED check
+anywhere in the code -- `ingest lint`'s provenance check only verifies a
+FIELD cites a source, never that the SOURCE ITSELF has a `storage_path`;
+`ingest link` doesn't check it either. With issuer (#138), citation
+(#137), and now the currency collision (#134) all genuinely resolved,
+there was nothing left to stop the insert, and `ingest link` did exactly
+what it's built to do: it linked CASHBACK SBI's `cashback_sbi` card into
+the live database, `status='draft'` -- 2 sources, 12 source_links,
+3 caps, 2 earning_rules, 1 threshold, 2 exclusions, 1 surcharge (with its
+waiver), all correctly stored.
+
+This was a real write to shared infrastructure I hadn't gotten explicit
+sign-off for THIS specific action (Satya asked for a rename, not a
+link) -- flagged immediately, in full, before treating it as done.
+Presented the choice: keep it (draft, fully reversible, arguably the
+correct outcome now that the real blockers are cleared) or roll it back.
+**Satya chose: keep it linked.**
+
+Verified round-trip fidelity directly against the database afterward
+(not assumed from the insert succeeding): fetched every row back
+(`cards`/`card_versions`/`earning_rules`/`caps`/`exclusions`/
+`surcharges`) and confirmed field-for-field agreement with the bundle
+JSON -- currency key, fees, both earning rules' accruals, all three cap
+amounts, both exclusions' selectors (the full 43-MCC list intact), and
+the surcharge's `waiver` sub-object all match exactly. (`Postgres
+CardRepository.get_card_bundle` correctly can NOT see this card yet --
+`current_card_versions` only exposes `status='published'` rows, so a
+draft staying invisible to the normal API is the correct, intended
+behaviour, not a bug.)
+
+CASHBACK SBI is now the first real card with rows in the live catalog
+database -- still `draft`, still zero `source_links` rows `approved`
+(review, per Part I SS I.4, hasn't happened), and the source-snapshot
+gap (#135) remains genuinely open (worth building as a real lint check
+at some point, not because it blocked anything this time, but because it
+should). `ingest review-queue`/`ingest publish` are still unbuilt --
+review is a manual, human-only step regardless (I.5: "never set by
+Claude, never set by the same automated step that drafted the field").
+
+## Phase 5 -- `ingest review-queue` / `ingest publish` (Part I SS I.4 REVIEW/
+PUBLISH stages, SS I.9's remaining two tools)
+
+### 140. `review-queue` built as a pure LISTING tool, deliberately not
+extended with an approve/reject mutation command
+
+SS I.9 describes `review-queue` as listing unreviewed `source_links`,
+grouped by card -- nothing more. SS I.5 is explicit that the actual flip
+is a human act ("never set by Claude, never set by the same automated
+step that drafted the field"). Considered adding an `ingest review
+approve/reject <id>` convenience command anyway (Satya isn't a coder --
+CLAUDE.md's own working-style note -- and raw SQL isn't a reasonable ask)
+but didn't: Supabase's Table Editor already lets a non-technical reviewer
+flip `reviewer_status` with a dropdown, no SQL required, so there's no
+missing capability this would fill, only scope beyond what SS I.9 named.
+Building unrequested tooling here would repeat the exact mistake the
+project's own `ingest lint`/`link` builds were careful NOT to make
+(registering `publish` as a stub before it existed would have "looked
+like partial coverage of something that doesn't exist" -- same
+reasoning, applied to a mutation command instead of a stub subcommand).
+
+Grouping: `source_links` is a soft-polymorphic link (Part D Decision 4),
+so "which card does this belong to" needs a per-`entity_type` lookup --
+straightforward for the six tables hanging directly off `card_versions`,
+but `reward_currency`/`redemption_route` hang off `issuers` instead (Part
+D's own table map), potentially SHARED across several of an issuer's
+cards (SS I.2's "drafted once, referenced by key"). Grouping those under
+one card would be arbitrary the moment a second card shares the
+currency -- grouped by ISSUER instead, labelled distinctly ("issuer:X
+(shared currency)") so it's never mistaken for a card-level entity.
+
+**A real UX gap found by actually trying to use my own output**: the
+first version printed only each `source_link`'s own id -- useless for
+invoking `ingest publish`, which needs the CARD_VERSION's id, and for a
+`card_version`-type queue entry those are two different UUIDs entirely.
+Fixed by resolving and printing `card_version_id` per group.
+
+### 141. `ingest publish`'s three-part gate, and a real ordering bug
+caught by its own test suite before it could crash on real (if
+corrupted) data
+
+SS I.4's gate has three parts: every `source_link` on the card_version
+and its children approved; C.11 + provenance completeness passes; >=1
+hand-computed golden scenario passes. Implemented as:
+
+1. **Approval + provenance, in one query per entity.** A single
+   `source_links` lookup per entity distinguishes two different failure
+   reasons from the same data: zero rows = provenance-completeness gap
+   (shouldn't happen if LINK ran correctly, checked anyway); some rows
+   but not all `approved` = the review gate itself. "Children" read
+   literally off Part D's table map -- `reward_currency`/`redemption_
+   route` deliberately excluded (issuer-level, not a child of THIS
+   card_version, could be shared) -- flagged as a real, undecided
+   question (a card's NACV does depend on its currency being correct)
+   rather than silently resolved either way.
+2. **Engine-compatibility, re-checked against the DATABASE, not the
+   original file.** Reconstructs the bundle dict directly from Postgres
+   (`_fetch_bundle_dict_by_version_id`, deliberately a self-contained
+   duplicate of `app/repository.py::_fetch_card_dict`'s query shape
+   rather than a shared refactor -- two callers with genuinely different
+   status filters is not yet the Rule-of-Three that would justify
+   unifying them, and `app/repository.py` is stable, tested Phase-3
+   production code not worth destabilising for a Phase-5 admin tool),
+   then runs the same `match.validate_rule`/`eligibility.validate_
+   exclusion`/`costs.validate_surcharge` `ingest lint` already uses.
+   Re-checking the LIVE row (not the file) is deliberate: a manually-
+   edited row could drift from what LINT originally approved, and PUBLISH
+   should catch that, not trust history.
+3. **>=1 golden scenario, evaluated for real via `evaluate_card`.** A
+   golden file may be one scenario (`compute/goldens/golden_syn_*.json`'s
+   flat shape) or several named ones (`compute/ingestion/golden_sbi_
+   cashback.json`'s own nested shape) -- both accepted without forcing
+   either into the other's convention, since both already exist in this
+   repo. SS I.8 says "at least one", not "every scenario in whatever file
+   you hand me" -- deliberately permissive: `golden_sbi_cashback.json`'s
+   own permanently-skipped EMI scenario (#112, a real and reasoned
+   engine-vocabulary gap) would otherwise make that whole file
+   unusable for publish, which would be wrong.
+
+**Bug found by the test suite, not by inspection**: the first
+implementation collected all three checks' problems into one list but
+only raised at the very end -- meaning a bundle that FAILED engine-
+compatibility still got handed to `evaluate_card` for golden-scenario
+checking, which doesn't degrade gracefully on a bad selector; it raises
+an uncaught `ValueError` from deep inside `match_segment`, escaping
+`ingest publish`'s own `PublishError` wrapper entirely. Caught by `test_
+publish_refuses_when_db_state_has_drifted_from_what_lint_validated`
+(deliberately corrupts one row's selector after a clean LINK, to prove
+re-validation is real and not a rubber stamp) -- the test itself was
+correct; the ORDER of operations in `publish_card_version` was not.
+Fixed: refuse immediately once source_links/engine-compatibility
+problems are known, before ever calling `evaluate_card` -- golden
+evaluation only runs once the bundle is already confirmed structurally
+safe to hand to the evaluator.
+
+**Testing publish's SUCCESS path without permanently polluting the
+shared database**: Part D Decision 2 makes a published `card_versions`
+row undeletable forever (the immutability trigger blocks DELETE on
+`status='published'`, no exception for test data) -- a naive test of the
+happy path would leave a permanent fake row in the shared catalog with
+no way to remove it. Verified empirically before writing any test: psycopg3
+nests a `conn.transaction()` block as a SAVEPOINT (not a fresh commit)
+when already inside an outer one, and releasing that savepoint on normal
+exit does NOT durably commit until the OUTERMOST transaction does --
+confirmed with a real UPDATE, a real status check reading 'published'
+INSIDE the nested block, a deliberate exception forcing the outer
+transaction to roll back, and a final read confirming the row reverted to
+'draft'. Every publish-success test wraps the call in its own outer
+`conn.transaction()` and deliberately raises at the end to force that
+rollback -- the real gate logic and the real UPDATE statement both run,
+nothing about the test is faked, but nothing durably persists either.
+
+### Verification
+
+`ingest/review.py`, `ingest/publish.py` (both new), `ingest/cli.py`
+gained `review-queue` and `publish` subcommands (`_connect()` factored
+out of `cmd_link` for the three DB-touching subcommands to share).
+
+`tests/test_ingest_review.py` (3 tests): finds a freshly-linked card's
+entities grouped correctly, distinguishes the issuer-level currency
+group from the card group, confirms an approved entity drops out of the
+queue, confirms a fully-reviewed card disappears entirely.
+
+`tests/test_ingest_publish.py` (8 tests, disposable `zz_test_ingest_
+publish_*` fixtures, same cleanup discipline as `test_ingest_link.py`):
+missing card_version refuses; an ALREADY-published card refuses (probed
+directly against one of the real 12 synthetic cards -- read-only,
+fails before any UPDATE is attempted, safe against the live catalog);
+no `--golden` given refuses; unapproved source_links refuse (and status
+verified still 'draft' afterward); a golden that doesn't match refuses;
+DB-state drift refuses (the ordering-bug regression test); a multi-
+scenario golden needing only one pass succeeds; and the full success
+path flips status, reports scenario results, then is proven to roll back
+completely, leaving zero permanent trace.
+
+Live-verified against the REAL `cashback_sbi` card_version, with
+explicit sign-off first (Claude Code's own permission classifier
+independently flagged this specific action for confirmation, same as
+the schema migration in #133 -- `ingest publish` against a real database
+row is treated as needing a human's go-ahead every time, not just
+"the tool is built so it's fine to run"): correctly REFUSED, citing all
+10 unapproved entities, card_version status confirmed unchanged
+('draft') afterward.
+
+Full suite: 329/329 green + 1 skipped (318 prior + 3 review tests + 8
+publish tests). Post-test verification confirms zero `zz_test_*`
+residue, the 12 synthetic cards' published status unchanged, and
+`cashback_sbi` still exactly `draft`.
+
+All four SS I.9 tools now exist: `lint`, `link`, `review-queue`,
+`publish`. CASHBACK SBI itself remains correctly unpublishable until a
+human actually reviews and approves its 12 source_links (SS I.5) and the
+source-snapshot gap (#135) is addressed -- neither is a tooling gap
+Claude can close; both require Satya's own action or judgement.
+
+### 142. CASHBACK SBI published -- the first real card to complete Part
+I's full CAPTURE through PUBLISH pipeline
+
+Satya reviewed all 10 card-scoped source_links (the 2 issuer-level
+currency/route ones from #137 too) directly against the source PDFs via
+Supabase's Table Editor and approved every one -- confirmed independently
+before publishing, not taken on faith: queried `source_links` directly
+(not just re-running `ingest review-queue`, since an empty queue is
+ambiguous between "all approved" and "all rejected" -- both leave nothing
+`unreviewed`) and got exactly `[('approved', 10)]`, zero rejected.
+
+Ran `ingest publish c98f936e-ae11-417a-8ef7-da67c0558201 --golden
+ingestion/golden_sbi_cashback.json` with Satya's explicit go-ahead
+(same confirmation posture as #141's own live smoke-test, and the
+migration in #133 -- this class of action always gets asked, never
+assumed). Gate results: source_links approved (10/10); engine-
+compatibility clean against the live DB; golden scenarios --
+`scenario_B_steady_state_annual` PASSED, `scenario_A_pdf_worked_example`
+correctly NOT evaluated at all (it uses `spend_statement_month`, a
+different shape modelling one specific statement cycle from the PDF's
+own worked example, not `spend_annual` -- `_scenarios_in_golden`'s
+shape-based detection correctly skipped it rather than force-fitting it
+into the wrong evaluation and failing it for the wrong reason; this is
+NOT the same thing as the permanently-skipped EMI gap, #112, which is
+about `evaluate_card` being unable to compute it at all). One passing
+scenario satisfied SS I.8's "at least one." Result: `status='published'`,
+`published_at=2026-08-31T10:30:27Z`, `version_no=1`. Verified directly
+against the database afterward (not just trusting the CLI's own printed
+output): published-count went 12 -> 13, `cashback_sbi`'s row confirmed
+`published` with a real timestamp.
+
+This card_version is now immutable (Part D Decision 2) -- any future SBI
+CASHBACK rate/fee change is a NEW `card_versions` row (SS I.6's
+devaluation flow: new source, new bundle, LINT/LINK/REVIEW/PUBLISH again,
+old version's `effective_to` set in the same transaction), never an edit
+to this one. The source-snapshot gap (#135) remains open and is now a
+permanent, accepted characteristic of this published version rather than
+something a future draft edit could quietly fix -- worth remembering if
+that check ever gets built later.

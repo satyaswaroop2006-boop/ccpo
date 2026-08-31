@@ -529,10 +529,14 @@ def test_golden_syn_fuel_surcharge():
     gross_reward_value = sum((r.reward for r in final), Decimal("0"))
     assert gross_reward_value == Decimal(str(golden["expected"]["gross_reward_value"]))  # cashback_inr, v=1
 
-    # Stage 10: surcharge (fuel only) and the waiver threshold.
+    # Stage 10: surcharge (fuel only) and the waiver threshold. Uses
+    # normalised.segments (raw spend), not eligible.reward -- surcharges
+    # are independent of reward eligibility (docs/DECISIONS.md #131);
+    # identical to eligible.reward here only because syn_fuel has no
+    # exclusions at all.
     surcharges = _load_surcharges("syn_fuel")
     assert len(surcharges) == 1
-    cost_of_surcharge = surcharge_cost(eligible.reward, surcharges)
+    cost_of_surcharge = surcharge_cost(normalised.segments, surcharges).total
     assert cost_of_surcharge == Decimal(str(golden["expected"]["surcharge_cost"]))
 
     thresholds = _load_thresholds("syn_fuel")
@@ -591,7 +595,10 @@ def test_golden_syn_travel_forex():
     # default 3.5% markup, purely illustrative, not part of syn_travel's NACV.
     card = next(c for c in CARDS if c["key"] == "syn_travel")
     forex_markup = Decimal(str(card["version"]["forex_markup"]))
-    intl_total = international_spend_total(eligible.reward)
+    # normalised.segments (raw spend), not eligible.reward -- forex cost is
+    # independent of reward eligibility (docs/DECISIONS.md #131); identical
+    # to eligible.reward here only because syn_travel has no exclusions.
+    intl_total = international_spend_total(normalised.segments)
     cost_of_forex = forex_cost(intl_total, forex_markup)
     assert cost_of_forex == Decimal(str(golden["expected"]["forex_cost"]))
     assert forex_cost(intl_total, Decimal("0.035")) == Decimal("4956.000")  # the contrast

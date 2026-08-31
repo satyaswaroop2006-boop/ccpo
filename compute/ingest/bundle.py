@@ -37,6 +37,37 @@ from typing import Any
 # just keeps this list and that one readable side by side).
 ENTITY_LIST_KEYS = ("earning_rules", "caps", "thresholds", "exclusions", "benefits", "surcharges")
 
+# `source_links.entity_type`'s CHECK vocabulary (0001_init.sql), keyed by
+# the bundle list this module already walks -- `ingest link` (Part I SS
+# I.9) needs this to label each source_links row; lint doesn't, since it
+# never writes to the database.
+ENTITY_TYPE_BY_LIST_KEY = {
+    "earning_rules": "earning_rule", "caps": "cap", "thresholds": "threshold",
+    "exclusions": "exclusion", "benefits": "benefit", "surcharges": "surcharge",
+}
+
+# Part I SS I.1's own source_type -> evidentiary-weight table, restated as
+# a mechanical default for `source_links.confidence` at LINK time. SS I.5
+# defines confidence as ALSO depending on whether the transcription itself
+# required interpretation ("an unambiguous direct transcription" vs "minor
+# interpretation" vs "real interpretive judgement") -- a per-FIELD judgment
+# call no bundle drafted so far records explicitly (no bundle has a
+# `confidence` field of its own), and not something a mechanical tool can
+# infer from the source_type alone. This mapping covers only the
+# source-type half of SS I.5's definition; a human reviewer can still
+# raise or lower it before publish (only PUBLISHED rows are immutable) --
+# it is a starting default, not a substitute for the judgment call.
+DEFAULT_CONFIDENCE_BY_SOURCE_TYPE = {
+    "mitc": "high", "fee_schedule": "high",
+    "official_pdf": "medium", "reward_terms": "medium", "product_page": "medium",
+    "network_benefits": "medium", "transfer_partner_doc": "medium",
+    "faq": "low", "third_party": "low",
+}
+
+
+def default_confidence_for_source_type(source_type: str) -> str:
+    return DEFAULT_CONFIDENCE_BY_SOURCE_TYPE.get(source_type, "low")
+
 
 @dataclass(frozen=True)
 class CitedEntity:

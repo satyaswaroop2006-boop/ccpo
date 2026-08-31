@@ -50,12 +50,14 @@ def test_earning_rule_with_unsupported_selector_field_now_raises():
 
 
 def test_exclusion_with_unsupported_selector_field_now_raises():
+    # txn_max moved to accepted-but-unenforced in Phase 5 Task A (docs/
+    # DECISIONS.md #130) -- merchants stays genuinely unsupported.
     from engine.eligibility import Exclusion, ExclusionSelector
 
     bad_exclusion = Exclusion(
-        key="bad", selector=ExclusionSelector(txn_max=Decimal("100")), excluded_from=("rewards",),
+        key="bad", selector=ExclusionSelector(merchants=("bigbasket",)), excluded_from=("rewards",),
     )
-    with pytest.raises(ValueError, match="txn_max"):
+    with pytest.raises(ValueError, match="merchants"):
         apply_eligibility(NormalisedSpend(segments=()), [bad_exclusion])
 
 

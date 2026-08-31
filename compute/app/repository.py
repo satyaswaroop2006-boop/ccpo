@@ -78,7 +78,19 @@ class PostgresCardRepository:
     `lru_cache`d factory); call `.close()` on shutdown."""
 
     def __init__(self, dsn: str) -> None:
-        self._conn = psycopg.connect(dsn)
+        # prepare_threshold=None: Supabase's pooler connection string (port
+        # 6543, PGBouncer in transaction-pooling mode) doesn't preserve
+        # server-side prepared statements across pooled backend connections
+        # -- psycopg3's default auto-prepare (after 5 identical query texts
+        # on one connection) trips `DuplicatePreparedStatement` under this
+        # pooler. Confirmed while building Phase 5's `ingest link`
+        # (docs/DECISIONS.md #136), whose repeated identical INSERTs across
+        # several linked cards hit exactly this; `get_all_card_bundles`'s
+        # own repeated identical SELECTs across 12+ cards were always
+        # equally exposed, just never happened to cross the threshold in
+        # the existing test/call patterns. Standard fix for this pooler
+        # mode, applied everywhere this project opens a connection.
+        self._conn = psycopg.connect(dsn, prepare_threshold=None)
 
     def close(self) -> None:
         self._conn.close()
@@ -183,7 +195,7 @@ def _fetch_card_dict(conn: psycopg.Connection, card_key: str) -> dict | None:
         benefit_rows = cur.fetchall()
 
         cur.execute(
-            "select key, selector, rate, gst_on_surcharge from surcharges where card_version_id = %s order by key",
+            "select key, selector, rate, gst_on_surcharge, waiver from surcharges where card_version_id = %s order by key",
             (cv_id,),
         )
         surcharge_rows = cur.fetchall()
@@ -230,10 +242,12 @@ def _fetch_card_dict(conn: psycopg.Connection, card_key: str) -> dict | None:
             b["face_value"] = face_value
         benefits.append(b)
 
-    surcharges = [
-        {"key": skey, "selector": selector, "rate": rate, "gst_on_surcharge": gst_on_surcharge}
-        for skey, selector, rate, gst_on_surcharge in surcharge_rows
-    ]
+    surcharges = []
+    for skey, selector, rate, gst_on_surcharge, waiver in surcharge_rows:
+        s = {"key": skey, "selector": selector, "rate": rate, "gst_on_surcharge": gst_on_surcharge}
+        if waiver is not None:
+            s["waiver"] = waiver
+        surcharges.append(s)
 
     return {
         "key": key, "name": name, "network": network, "tier": tier, "segment": segment,

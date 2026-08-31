@@ -25,7 +25,7 @@ from decimal import Decimal
 from engine.accrue import Accrual
 from engine.benefits import Benefit
 from engine.caps import Cap, Window
-from engine.costs import Surcharge
+from engine.costs import Surcharge, SurchargeWaiver
 from engine.eligibility import Exclusion, ExclusionSelector
 from engine.match import EarningRule, Selector
 from engine.thresholds import Payload, Threshold, ThresholdBasis, Tier
@@ -154,6 +154,21 @@ def _benefit_from_dict(d: dict) -> Benefit:
     )
 
 
+def _surcharge_waiver_from_dict(d: dict) -> SurchargeWaiver:
+    """Phase 5 Task B (docs/DECISIONS.md #132) -- CASHBACK SBI's own
+    ingestion bundle already used exactly these field names
+    (rate/txn_min/txn_max/cap_amount/cap_window) before this loader
+    existed, drafted directly against Part A SS A.11's prose; no renaming
+    needed to match `engine.costs.SurchargeWaiver`."""
+    return SurchargeWaiver(
+        rate=Decimal(str(d["rate"])),
+        cap_amount=Decimal(str(d["cap_amount"])),
+        cap_window=Window(kind=d["cap_window"]["kind"], alignment=d["cap_window"].get("alignment")),
+        txn_min=Decimal(str(d["txn_min"])) if d.get("txn_min") is not None else None,
+        txn_max=Decimal(str(d["txn_max"])) if d.get("txn_max") is not None else None,
+    )
+
+
 def _route_from_dict(d: dict) -> RedemptionRoute:
     return RedemptionRoute(
         key=d["key"], route_type=d["route_type"],
@@ -234,6 +249,7 @@ def bundle_from_dict(card: dict) -> CardRuleBundle:
         Surcharge(
             key=s["key"], selector=_selector_from_dict(s["selector"]),
             rate=Decimal(str(s["rate"])), gst_on_surcharge=Decimal(str(s["gst_on_surcharge"])),
+            waiver=_surcharge_waiver_from_dict(s["waiver"]) if s.get("waiver") is not None else None,
         )
         for s in card.get("surcharges", [])
     )

@@ -41,7 +41,7 @@
       "Online monthly cashback = 50,000 x 5% = 2,500, BUT online cap = 2,000/cycle -> capped to 2,000. Overflow earns zero.",
       "Offline monthly cashback = 20,000 x 1% = 200 (below offline cap 2,000).",
       "Monthly total = 2,000 + 200 = 2,200 (below aggregate cap 4,000).",
-      "Annual gross cashback = 2,200 x 12 = 26,400 (cashback_inr, v=1).",
+      "Annual gross cashback = 2,200 x 12 = 26,400 (sbi_cashback_inr, v=1).",
       "Waiver-eligible annual spend = 8,40,000 >= 2,00,000 -> renewal fee WAIVED -> steady-state fee = 0.",
       "NACV steady-state = 26,400 - 0 = 26,400.",
       "Year-1: joining fee 999 x 1.18 (GST) = 1,178.82. Year-1 value = 26,400 - 1,178.82 = 25,221.18."

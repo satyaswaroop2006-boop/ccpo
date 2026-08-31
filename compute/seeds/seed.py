@@ -32,7 +32,11 @@ def main() -> None:
         sys.exit("Set DATABASE_URL")
     publish = "--draft" not in sys.argv
 
-    with psycopg.connect(url) as conn, conn.cursor() as cur:
+    # prepare_threshold=None: Supabase's pooler (PGBouncer, transaction
+    # pooling) doesn't support psycopg3's auto-prepared statements across
+    # pooled backend connections -- see app/repository.py's PostgresCard
+    # Repository, docs/DECISIONS.md #136.
+    with psycopg.connect(url, prepare_threshold=None) as conn, conn.cursor() as cur:
         cur.execute("select 1 from issuers where key = %s", (ISSUER["key"],))
         if cur.fetchone():
             sys.exit("Synthetic issuer already seeded — use a fresh database.")
@@ -158,9 +162,10 @@ def main() -> None:
             for s in card.get("surcharges", []):
                 cur.execute(
                     "insert into surcharges (card_version_id, key, selector, rate,"
-                    " gst_on_surcharge) values (%s,%s,%s,%s,%s)",
+                    " gst_on_surcharge, waiver) values (%s,%s,%s,%s,%s,%s)",
                     (cv_id, s["key"], j(s["selector"]), s["rate"],
-                     s.get("gst_on_surcharge", 0.18)),
+                     s.get("gst_on_surcharge", 0.18),
+                     j(s["waiver"]) if s.get("waiver") is not None else None),
                 )
 
             if publish:

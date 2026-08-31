@@ -34,7 +34,15 @@ from engine.caps import apply_caps, apply_incremental_bands
 from engine.costs import compute_fees, forex_cost, international_spend_total, surcharge_cost
 from engine.eligibility import apply_eligibility
 from engine.match import match
-from engine.normalise import DEFAULT_TICKET_SIZES, DEFAULT_UPI_CATEGORY_MIX, AssumptionsSnapshot, NormalisedSpend, SpendInput, normalise
+from engine.normalise import (
+    DEFAULT_CATEGORY_MCC_MAP,
+    DEFAULT_TICKET_SIZES,
+    DEFAULT_UPI_CATEGORY_MIX,
+    AssumptionsSnapshot,
+    NormalisedSpend,
+    SpendInput,
+    normalise,
+)
 from engine.thresholds import apply_rule_activations, evaluate_thresholds
 from engine.valuation import RewardCurrency, value_accrual_results
 
@@ -56,6 +64,7 @@ class EvaluateAssumptions:
     primary_routes: dict[str, str] = field(default_factory=dict)  # currency_key -> route_key
     ticket_sizes: dict[str, Decimal] = field(default_factory=dict)  # sparse override
     upi_category_mix: dict[str, Decimal] = field(default_factory=dict)  # sparse override
+    category_mcc_map: dict[str, tuple[int, ...]] = field(default_factory=dict)  # sparse override
     voucher_utilisation: Decimal = DEFAULT_UTILISATION
     voucher_friction: Decimal = DEFAULT_FRICTION
     flat_perk_utilisation: Decimal = DEFAULT_UTILISATION
@@ -83,7 +92,9 @@ def assumptions_snapshot_from(assumptions: EvaluateAssumptions) -> AssumptionsSn
     ticket_sizes.update(assumptions.ticket_sizes)
     upi_category_mix = dict(DEFAULT_UPI_CATEGORY_MIX)
     upi_category_mix.update(assumptions.upi_category_mix)
-    return AssumptionsSnapshot(ticket_sizes=ticket_sizes, upi_category_mix=upi_category_mix)
+    category_mcc_map = dict(DEFAULT_CATEGORY_MCC_MAP)
+    category_mcc_map.update(assumptions.category_mcc_map)
+    return AssumptionsSnapshot(ticket_sizes=ticket_sizes, upi_category_mix=upi_category_mix, category_mcc_map=category_mcc_map)
 
 
 def evaluate_card(
@@ -95,9 +106,10 @@ def evaluate_card(
     assumptions = assumptions or EvaluateAssumptions()
 
     # Stage 1
-    normalised = normalise(spend, assumptions_snapshot_from(assumptions))
+    snapshot = assumptions_snapshot_from(assumptions)
+    normalised = normalise(spend, snapshot)
     # Stage 2
-    eligible = apply_eligibility(normalised, bundle.exclusions)
+    eligible = apply_eligibility(normalised, bundle.exclusions, snapshot.category_mcc_map)
 
     # Stage 3-4
     bindings = match(NormalisedSpend(segments=eligible.reward), bundle.earning_rules)
@@ -150,9 +162,23 @@ def evaluate_card(
         threshold_events, currencies, assumptions.primary_routes, voucher_valuations,
     )
 
-    # Stage 10
-    cost_of_surcharge = surcharge_cost(eligible.reward, bundle.surcharges)
-    intl_total = international_spend_total(eligible.reward)
+    # Stage 10 -- surcharges/forex apply to the RAW spend grid
+    # (normalised.segments), not eligible.reward. Part A SS A.10/A.11's own
+    # formulas (x(c,k,t) = total category spend) tie these costs to actual
+    # spend, never to reward eligibility -- a card can exclude fuel from
+    # cashback (Stage 2's "rewards" mask) while still charging its flat
+    # fuel surcharge on that exact same spend; the two are independent
+    # economics that happen to share a category selector, not one gating
+    # the other. Using eligible.reward here was a latent bug (discovered
+    # while building Phase 5 Task B's fuel-surcharge-waiver rule for
+    # CASHBACK SBI, docs/DECISIONS.md #131) that never fired against any
+    # of the 12 synthetic cards because none combines a surcharge/intl
+    # selector with a reward exclusion on the same category -- syn_fuel
+    # has no exclusions at all, so eligible.reward == normalised.segments
+    # for it regardless, and every golden stayed byte-identical after
+    # this fix (verified).
+    surcharge_result = surcharge_cost(normalised.segments, bundle.surcharges)
+    intl_total = international_spend_total(normalised.segments)
     cost_of_forex = forex_cost(intl_total, bundle.forex_markup)
     fees = compute_fees(bundle.joining_fee, bundle.annual_fee, threshold_events)
 
@@ -160,11 +186,13 @@ def evaluate_card(
     nacv = assemble_nacv(
         gross_reward=gross_reward_value, milestone_value=steady_milestone, benefit_value=benefit_value,
         steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
-        forex_cost=cost_of_forex, surcharge_cost=cost_of_surcharge,
+        forex_cost=cost_of_forex, surcharge_cost=surcharge_result.total,
         milestone_value_year1=year1_milestone, milestone_lines=steady_lines,
     )
 
     flags = set()
+    flags.update(eligible.flags)
+    flags.update(surcharge_result.flags)
     for r in final:
         flags.update(r.flags)
     for v in reward_valuations:
