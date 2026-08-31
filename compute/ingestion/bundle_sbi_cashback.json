@@ -6,24 +6,36 @@
   "network": "visa",
   "effective_from": "2026-01-01",
   "status": "draft",
-
   "_sources": {
     "reward_terms": {
       "source_type": "reward_terms",
       "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/ekit-tncs/cashback-tnc-ekit.pdf",
       "snapshot_note": "CASHBACK SBI Card e-kit T&C, 47pp. Section 11 (Card Cashback) and Section 13 (fuel surcharge) are the ingested reward source.",
-      "authoritative_for": ["earning_rules", "caps", "exclusions", "surcharge_waiver"],
-      "reviewer_status": "unreviewed"
+      "authoritative_for": [
+        "earning_rules",
+        "caps",
+        "exclusions",
+        "surcharge_waiver"
+      ],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/reward_terms-2026-08-31.pdf",
+      "captured_at": "2026-08-31"
     },
     "mitc": {
       "source_type": "mitc",
       "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/most-important-terms-and-conditions/mitc-english.pdf",
       "issuer_level": true,
-      "authoritative_for": ["annual_fee", "joining_fee", "renewal_waiver_threshold", "forex_markup"],
-      "reviewer_status": "unreviewed"
+      "authoritative_for": [
+        "annual_fee",
+        "joining_fee",
+        "renewal_waiver_threshold",
+        "forex_markup"
+      ],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/mitc-2026-08-31.pdf",
+      "captured_at": "2026-08-31"
     }
   },
-
   "version": {
     "joining_fee": 999,
     "annual_fee": 999,
@@ -32,48 +44,77 @@
     "_source": "mitc",
     "_note": "Fee 999/999, renewal waived on annual spend >= 2,00,000 (see waiver threshold). Forex 3.5% (MITC standard, non-premium tier)."
   },
-
   "currency": "sbi_cashback_inr",
   "currencies": [
     {
       "key": "sbi_cashback_inr",
       "routes": [
-        { "key": "statement_credit", "route_type": "statement_credit", "ratio": 1.0, "friction_default": 1.0,
+        {
+          "key": "statement_credit",
+          "route_type": "statement_credit",
+          "ratio": 1.0,
+          "friction_default": 1.0,
           "_source": "reward_terms",
-          "_note": "Ratio 1.0 (direct rupee credit, no conversion) -- reward_terms Sec 11.1(a): 'Card Cashback earned on such SBI Card is directly credited to the SBI Card account within two working days of the statement generation.' route_type=statement_credit -- reward_terms FAQ 14: 'The Card Cashback will be automatically credited to your SBI Card account and will reflect in your monthly statement.'" }
+          "_note": "Ratio 1.0 (direct rupee credit, no conversion) -- reward_terms Sec 11.1(a): 'Card Cashback earned on such SBI Card is directly credited to the SBI Card account within two working days of the statement generation.' route_type=statement_credit -- reward_terms FAQ 14: 'The Card Cashback will be automatically credited to your SBI Card account and will reflect in your monthly statement.'"
+        }
       ],
       "_source": "reward_terms",
       "_note": "Direct statement-credit cashback, v = 1, no redemption ambiguity -- resolved per _review_findings.checklist_item_7_currency_route_provenance (was FLAGGED by `ingest lint`, see docs/DECISIONS.md #129/#137). Key renamed from 'cashback_inr' to 'sbi_cashback_inr' on 2026-08-31 (docs/DECISIONS.md #139) -- the original key collided with the SYNTHETIC test catalog's own reward_currencies row of the same name (reward_currencies.key is globally unique in the schema, confirmed live), which `ingest link` correctly refused to let this real card silently share."
     }
   ],
-
   "earning_rules": [
     {
       "key": "online_5pct",
-      "selector": { "channels": ["online"] },
-      "accrual": { "type": "percentage", "rate": 0.05, "rounding": "floor_paise_per_txn", "currency": "sbi_cashback_inr" },
-      "caps": ["cap_online_monthly", "cap_aggregate_monthly"],
+      "selector": {
+        "channels": [
+          "online"
+        ]
+      },
+      "accrual": {
+        "type": "percentage",
+        "rate": 0.05,
+        "rounding": "floor_paise_per_txn",
+        "currency": "sbi_cashback_inr"
+      },
+      "caps": [
+        "cap_online_monthly",
+        "cap_aggregate_monthly"
+      ],
       "priority": 100,
       "_source": "reward_terms",
       "_note": "5% on online spends. 'Online' identified by network online indicators (T&C 11.1.c). Floor rounding per txn (T&C 11.1.v: 2999 x 5% = 149, floored from 149.95)."
     },
     {
       "key": "offline_1pct",
-      "selector": { "channels": ["pos", "contactless"] },
-      "accrual": { "type": "percentage", "rate": 0.01, "rounding": "floor_paise_per_txn", "currency": "sbi_cashback_inr" },
-      "caps": ["cap_offline_monthly", "cap_aggregate_monthly"],
+      "selector": {
+        "channels": [
+          "pos",
+          "contactless"
+        ]
+      },
+      "accrual": {
+        "type": "percentage",
+        "rate": 0.01,
+        "rounding": "floor_paise_per_txn",
+        "currency": "sbi_cashback_inr"
+      },
+      "caps": [
+        "cap_offline_monthly",
+        "cap_aggregate_monthly"
+      ],
       "priority": 90,
       "_source": "reward_terms",
       "_note": "1% on offline (non-online) spends. Any txn not flagged online is offline."
     }
   ],
-
   "caps": [
     {
       "key": "cap_online_monthly",
       "measure": "reward",
       "amount": 2000,
-      "window_def": { "kind": "statement_cycle" },
+      "window_def": {
+        "kind": "statement_cycle"
+      },
       "scope": "rule",
       "overflow": "zero",
       "_source": "reward_terms",
@@ -83,7 +124,9 @@
       "key": "cap_offline_monthly",
       "measure": "reward",
       "amount": 2000,
-      "window_def": { "kind": "statement_cycle" },
+      "window_def": {
+        "kind": "statement_cycle"
+      },
       "scope": "rule",
       "overflow": "zero",
       "_source": "reward_terms",
@@ -93,56 +136,104 @@
       "key": "cap_aggregate_monthly",
       "measure": "reward",
       "amount": 4000,
-      "window_def": { "kind": "statement_cycle" },
+      "window_def": {
+        "kind": "statement_cycle"
+      },
       "scope": "card",
       "overflow": "zero",
       "_source": "reward_terms",
       "_note": "Aggregate online+offline cashback capped 4,000 per statement cycle. Card-scoped so it binds across both earning rules."
     }
   ],
-
   "exclusions": [
     {
       "key": "cashback_mcc_exclusions",
       "selector": {
         "mcc_include": [
-          5172, 5541, 5542, 5983,
-          6540, 6541,
-          6513, 7349,
-          5051, 5094, 7631, 5944,
-          5111, 5192, 5942, 5943, 8211, 8220, 8241, 8244, 8249, 8299, 8351,
-          4900, 4814, 4816, 4899, 9399,
-          5960, 6300, 6381,
+          5172,
+          5541,
+          5542,
+          5983,
+          6540,
+          6541,
+          6513,
+          7349,
+          5051,
+          5094,
+          7631,
+          5944,
+          5111,
+          5192,
+          5942,
+          5943,
+          8211,
+          8220,
+          8241,
+          8244,
+          8249,
+          8299,
+          8351,
+          4900,
+          4814,
+          4816,
+          4899,
+          9399,
+          5960,
+          6300,
+          6381,
           5947,
-          4011, 4112,
-          6011, 6012, 6051,
-          7993, 7994, 5816,
+          4011,
+          4112,
+          6011,
+          6012,
+          6051,
+          7993,
+          7994,
+          5816,
           4784,
-          9222, 9311, 9402
+          9222,
+          9311,
+          9402
         ]
       },
-      "excluded_from": ["rewards"],
+      "excluded_from": [
+        "rewards"
+      ],
       "_source": "reward_terms",
       "_note": "No cashback on: fuel, wallet, rent, jewelry, education, utility, insurance, card/gift/novelty, railways, member-FI/quasi-cash, digital gaming, tolls, government. MCC list per T&C 11.1.d table. These still count toward fee-waiver spend (not excluded from fee_waiver scope)."
     },
     {
       "key": "min_txn_100",
-      "selector": { "txn_max": 100 },
-      "excluded_from": ["rewards"],
+      "selector": {
+        "txn_max": 100
+      },
+      "excluded_from": [
+        "rewards"
+      ],
       "_source": "reward_terms",
       "_note": "Cashback not applicable on transactions less than 100 (T&C 11.1.s). Modelled as exclusion of sub-100 txns from rewards. NOTE: category-mode approximation cannot see individual txns; flag as txn-mode-only precision."
     }
   ],
-
   "_engine_compatibility_note": "UPDATED as of Phase 5 Task A (docs/DECISIONS.md #130): both entries in exclusions[] above use selector fields (mcc_include, txn_max) that Part C defines -- these are now ENGINE-SUPPORTED. mcc_include is evaluated via a registry category->MCC map (engine.normalise.DEFAULT_CATEGORY_MCC_MAP, itself transcribed from this bundle's own sourced MCC table -- see that map's own comment) and flagged mcc_category_estimated; txn_max is accepted but deliberately unenforced in category mode (no per-transaction data to test it against) and flagged txn_threshold_unenforced instead of silently approximating. Loading exclusions[] as-is through bundle_from_dict is now safe -- the historical danger this note used to describe (_exclusion_selector_from_dict silently dropping these fields, producing an all-None ExclusionSelector that matched EVERYTHING and zeroed ALL cashback) is fixed; goldens/golden_mcc_gate_standalone.json is that fix's regression gate. tests/test_golden_sbi_cashback.py's _adapt_ingestion_bundle still drops exclusions[] for its own scenarios, but only because neither touches an MCC-excluded category or a sub-Rs100 ticket (provably inert either way), not because loading it is unsafe.",
-
   "thresholds": [
     {
       "key": "fee_waiver",
-      "basis": { "measure": "waiver_eligible_spend", "window": { "kind": "anniversary_year" } },
+      "basis": {
+        "measure": "waiver_eligible_spend",
+        "window": {
+          "kind": "anniversary_year"
+        }
+      },
       "tier_mode": "cumulative",
       "tiers": [
-        { "tier_index": 1, "threshold_amount": 200000, "payload": { "type": "waive_fee", "fee": "annual" } }
+        {
+          "tier_index": 1,
+          "threshold_amount": 200000,
+          "payload": {
+            "type": "waive_fee",
+            "fee": "annual"
+          }
+        }
       ],
       "_source": "mitc",
       "_note": "Renewal fee waived on annual spend >= 2,00,000. Waiver-eligible spend = all spend, including rent/fuel (excluded from REWARDS but not from the waiver threshold).",
@@ -150,37 +241,39 @@
       "_reviewer_note": "Approved by Satya 2026-08-15: MITC p.4's waiver clause ('Waived off on annual spends of Rs.2 Lakh or more') carries no exclusion anywhere in the MITC, unlike the reward-side MCC exclusions which live in a separately-scoped section of the T&C -- all spend, including rent/fuel, counts toward the Rs.2L threshold. This approval covers the rent-inclusion reading specifically, not every fact citing 'mitc' as a source -- see _sources.mitc.reviewer_status (still 'unreviewed') and the still-open Rs.99 Rewards Redemption Fee question in _review_checklist."
     }
   ],
-
   "surcharges": [
     {
       "key": "fuel_surcharge_waiver",
-      "selector": { "categories": ["fuel"] },
+      "selector": {
+        "categories": [
+          "fuel"
+        ]
+      },
       "rate": 0.01,
       "waiver": {
         "rate": 0.01,
         "txn_min": 500,
         "txn_max": 3000,
         "cap_amount": 100,
-        "cap_window": { "kind": "statement_cycle" }
+        "cap_window": {
+          "kind": "statement_cycle"
+        }
       },
       "gst_on_surcharge": 0.18,
       "_source": "reward_terms",
       "_note": "1% fuel surcharge waiver on txns 500-3000, max 100/statement/account (FAQ 17 + T&C 13.1). UPDATED as of Phase 5 Task B (docs/DECISIONS.md #131/#132): the 'waiver' sub-object above IS now consumed, via engine.costs.Surcharge.waiver / SurchargeWaiver -- NOT as a separate earning_rule (the syn_fuel precedent, docs/DECISIONS.md #26, was tried first and confirmed empirically inert for this card: cashback_mcc_exclusions already strips ALL fuel spend from Stage 2's 'rewards' view, so a refund-shaped earning_rule can only ever see zero fuel segments). Computed instead directly in costs.surcharge_cost() against the same raw matched spend the surcharge itself uses, capped per statement_cycle instance, txn_min/txn_max accepted-but-unenforced-and-flagged same as Task A's posture. Verified: Rs8,000/month fuel spend nets to Rs0 surcharge cost (waived_base=Rs80 < Rs100 cap); Rs20,000/month nets to Rs118.00/month (capped at Rs100 pre-GST). See docs/DECISIONS.md #110 for the original gap this closes."
     }
   ],
-
   "benefits": [],
-
   "_review_checklist": [
     "Confirm 'online' vs 'offline' channel mapping matches how SBI flags transactions (network online indicator).",
-    "[APPROVED by Satya 2026-08-15 -- see thresholds[0]._reviewer_status] Confirm whether rent (MCC 6513/7349) counts toward the 2L fee-waiver even though excluded from rewards — MITC/T&C wording.",
+    "[APPROVED by Satya 2026-08-15 -- see thresholds[0]._reviewer_status] Confirm whether rent (MCC 6513/7349) counts toward the 2L fee-waiver even though excluded from rewards \u00e2\u20ac\u201d MITC/T&C wording.",
     "Confirm forex 3.5% for CASHBACK specifically in the MITC fee table (not a premium-tier exception).",
-    "Statement-cycle caps approximated as calendar-month for MVP — flagged, acceptable per A.17.",
-    "Sub-100 txn exclusion is txn-mode-only; category-mode value will slightly overstate — acceptable, flagged.",
+    "Statement-cycle caps approximated as calendar-month for MVP \u00e2\u20ac\u201d flagged, acceptable per A.17.",
+    "Sub-100 txn exclusion is txn-mode-only; category-mode value will slightly overstate \u00e2\u20ac\u201d acceptable, flagged.",
     "[APPROVED by Satya 2026-08-15 -- see _review_findings.checklist_item_6_rs99_redemption_fee] MITC p.31's 'Rewards Redemption Fee: Rs.99 ... Statement Credit ...' -- does NOT apply to CASHBACK's automatic monthly cashback posting (no fee modelled, correctly).",
     "[RESOLVED 2026-08-31 -- see _review_findings.checklist_item_7_currency_route_provenance] Found by compute/ingest's lint tool (not by manual review): currencies[0] (cashback_inr) and its route (statement_credit) carried no source citation at all. Satya's decision: require a real citation rather than amend Part I to exempt 'self-evident' currency mechanics -- reward_terms Sec 11.1(a) + FAQ 12/14 found and cited (both entities now carry _source: \"reward_terms\")."
   ],
-
   "_review_findings": {
     "_note": "Evidence gathered against both full source PDFs (fetched and read in full, not just skimmed for the flagged items) -- for Satya's review, per Part I SS I.0/I.5: this is Claude doing the legwork (capture + cross-check), NOT a self-approval. reviewer_status on both _sources entries above is untouched (still 'unreviewed') -- only a human sets that.",
     "checklist_item_1_channel_mapping": {

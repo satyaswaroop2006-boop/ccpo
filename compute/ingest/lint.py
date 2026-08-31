@@ -1,6 +1,6 @@
 """Structural validation for ingestion bundles (Part I SS I.4's LINT stage).
 
-Two checks, both genuinely buildable and genuinely new to this pass:
+Three checks:
 
 1. **Provenance completeness** (Part I's own new requirement, SS I.4):
    every rule-bearing entity cites at least one source declared in the
@@ -21,6 +21,22 @@ Two checks, both genuinely buildable and genuinely new to this pass:
    purpose after a real bug fix this same pass made to `card_bundle.py`'s
    selector loaders (they used to silently drop the very fields these
    validators check for, so the validators never actually fired).
+3. **Source capture completeness** (Part I SS I.1, docs/DECISIONS.md
+   #135/#143): every declared source carries `storage_path` (an actual
+   Supabase Storage snapshot) and `captured_at` (when it was taken) --
+   genuinely different from check 1, which only verifies a FIELD cites a
+   source, never that the SOURCE ITSELF was properly captured. SS I.1's
+   own words: "A source with no snapshot is not yet captured -- a bare
+   URL is a lead, not evidence." Missing from `ingest lint`'s original
+   two-check pass, not by design -- found only once CASHBACK SBI's own
+   bundle was actually run all the way through LINK/REVIEW/PUBLISH and
+   its two sources (url/source_type/a free-text note, nothing else) were
+   never once flagged for lacking this. Running this check against that
+   ALREADY-PUBLISHED bundle now correctly reports 2 errors -- not a
+   regression in the tool, and not something publishing it retroactively
+   fixed or needs to fix; it's a real, permanent, now-visible gap on an
+   immutable card_version (Part D Decision 2 -- nothing about this check
+   can or should un-publish it).
 
 **What this does NOT do, on purpose, not by oversight**: Part C SS C.11's
 original four-check battery (selector-overlap linting, threshold-payload
@@ -138,10 +154,30 @@ def check_engine_compatibility(bundle: dict[str, Any]) -> list[LintIssue]:
     return issues
 
 
+_CAPTURE_FIELDS = ("storage_path", "captured_at")
+
+
+def check_source_capture_completeness(bundle: dict[str, Any]) -> list[LintIssue]:
+    sources = declared_sources(bundle)
+    issues: list[LintIssue] = []
+    for key, source in sources.items():
+        missing = [f for f in _CAPTURE_FIELDS if not source.get(f)]
+        if missing:
+            issues.append(LintIssue(
+                check="source_capture_completeness", severity="error", entity=f"sources ({key})",
+                message=f"missing {missing} -- Part I SS I.1: 'a bare URL is a lead, not evidence' until a snapshot is captured",
+            ))
+    return issues
+
+
 def lint_bundle(bundle: dict[str, Any]) -> LintReport:
-    issues = [*check_provenance_completeness(bundle), *check_engine_compatibility(bundle)]
+    issues = [
+        *check_provenance_completeness(bundle),
+        *check_engine_compatibility(bundle),
+        *check_source_capture_completeness(bundle),
+    ]
     return LintReport(
         issues=tuple(issues),
-        checks_run=("provenance_completeness", "engine_compatibility"),
+        checks_run=("provenance_completeness", "engine_compatibility", "source_capture_completeness"),
         checks_not_implemented=C11_BATTERY_NOT_IMPLEMENTED,
     )

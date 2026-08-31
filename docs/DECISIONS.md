@@ -3960,3 +3960,274 @@ to this one. The source-snapshot gap (#135) remains open and is now a
 permanent, accepted characteristic of this published version rather than
 something a future draft edit could quietly fix -- worth remembering if
 that check ever gets built later.
+
+## Phase 5 -- source-capture-completeness lint check (Part I SS I.1, resolves #135)
+
+### 143. `ingest lint` gains a third check -- and correctly, permanently,
+fails on CASHBACK SBI's own already-published bundle
+
+SS I.1: "A source with no snapshot is not yet captured -- a bare URL is
+a lead, not evidence." Genuinely different from the existing provenance-
+completeness check, which only verifies a FIELD cites a source key --
+never that the cited SOURCE ITSELF carries a real snapshot. `check_
+source_capture_completeness` (`ingest/lint.py`) checks every declared
+source for both `storage_path` (the Supabase Storage snapshot itself)
+and `captured_at` (when it was taken) -- SS I.1's own two-part
+description of what "captured" means, not just the storage_path half.
+Reports each missing field by name rather than a generic "not captured",
+same specificity discipline as every other check in this tool.
+
+**Ripple effect, handled deliberately, not discovered by surprise**:
+`link_bundle` already runs `lint_bundle` first and refuses on any
+failure -- every existing test bundle across `test_ingest_link.py`/
+`test_ingest_review.py`/`test_ingest_publish.py`, plus `test_ingest_
+lint.py`'s own `_minimal_compliant_bundle()` fixture, needed `storage_
+path`/`captured_at` added to their sources to stay genuinely compliant,
+or every test exercising `link_bundle` at all would have started failing
+at the LINT gate for an unrelated reason. Done upfront as part of this
+change, not left for the next `pytest` run to discover.
+
+**CASHBACK SBI's real bundle now fails lint -- correctly, and
+permanently.** `bundle_sbi_cashback.json`'s two sources (`reward_terms`,
+`mitc`) have only `url`/`source_type`/a free-text note -- neither has
+ever had a `storage_path` or `captured_at`, confirmed the same in #135
+and unchanged since. Running `ingest lint` on this file now reports 2
+errors where it previously reported 0. This does NOT retroactively touch
+the database -- `cashback_sbi`'s `card_version` is already `published`
+(#142) and immutable (Part D Decision 2); nothing about a file-level
+lint check can or should un-publish it, and nothing here attempts to.
+The test locking this in (`test_lint_bundle_against_real_sbi_bundle_
+matches_known_findings`) was updated to expect exactly these 2 errors,
+with an explicit docstring explanation of why this is the intended,
+correct outcome of building the check -- not a regression to chase down
+later, and not something that should prompt inventing a `storage_path`
+value to make the file "pass" again (that would be exactly the kind of
+guess Part I's own discipline exists to prevent).
+
+### Verification
+
+`tests/test_ingest_lint.py`: 6 new tests -- passes when both fields
+present; flags a bare-URL source citing both missing fields by name;
+flags only the genuinely-missing field when one is present; checks each
+declared source independently (a compliant source doesn't mask a
+non-compliant sibling); accepts the `_sources` underscore spelling too;
+confirms `lint_bundle` now runs three named checks. Live-verified via
+`python -m ingest lint ingestion/bundle_sbi_cashback.json`: exactly the
+2 expected errors, `ingest link`/`ingest publish` untouched (this check
+never runs against the database, so nothing about the already-published
+card_version was queried or affected).
+
+Full suite: 335/335 green + 1 skipped (329 prior + 6 new).
+
+## Phase 5 -- `ingest capture` (Part I SS I.1, resolves #135/#143)
+
+### 144. Two prerequisites found before writing any code -- neither
+anticipated by the task, both required stopping to ask
+
+Checked the environment before designing anything (CLAUDE.md: don't
+guess when a fact is checkable): `compute/.env` had only `DATABASE_URL`
+(a Postgres connection string) -- Supabase Storage is a SEPARATE service
+with its own REST API and its own credentials (a project URL + a
+`service_role` key), neither of which existed anywhere in this repo.
+Also confirmed no PDF-parsing library was installed at all (`pypdf`/
+`PyPDF2`/`pdfplumber`/poppler's `pdfinfo` all absent -- only `pdftotext`,
+via Git for Windows, has ever been used in this repo, for text
+extraction, not page-count verification).
+
+Asked Satya rather than choosing silently: (1) whether to build a real
+Supabase Storage backend (needs him to supply credentials) or a local-
+filesystem placeholder (fully testable today, but does NOT actually
+close #135 for CASHBACK -- a local file isn't a durable, shared
+snapshot); (2) whether to add `pypdf` (pure-Python, no system
+dependencies) as a new project dependency. **Satya chose: real Supabase
+Storage credentials, and yes to `pypdf`.** `requirements.txt` gained
+`pypdf>=4.0`; `.env.example` documents the two new required vars
+(`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`) without real values.
+Storage is implemented directly against the REST API with `httpx`
+(already a dependency) rather than adding the `supabase-py` client
+library -- the surface needed (ensure a bucket, upload an object) is two
+endpoints, not worth a new SDK.
+
+### 145. The immutability question, answered with mechanical evidence
+before touching any published row
+
+Verified directly against `0001_init.sql`'s actual trigger-attachment
+SQL, not inferred from Part D's prose: the immutability triggers
+(`forbid_published_mutation`/`forbid_child_mutation`) are attached to
+exactly `card_versions` and its six child rule tables (`caps/earning_
+rules/thresholds/exclusions/benefits/surcharges`) -- `sources` and
+`source_links` are NOT in that list and carry no immutability trigger of
+any kind. Mechanically, Postgres will accept an `UPDATE` on a `sources`
+row regardless of any card's publish status. This also matches Part D's
+own architecture: Decision 2 protects "catalog rows" (rule data);
+Decision 4 treats `sources`/`source_links` as a separate provenance
+layer alongside the catalog, not a child of it. Presented this evidence
+to Satya rather than just asserting it, and asked for confirmation
+before writing to CASHBACK's live, already-published rows regardless of
+the mechanical answer -- same posture as every other real-database write
+this project has made. **Satya confirmed: proceed.**
+
+### Design
+
+`ingest/storage.py`: `StorageBackend` Protocol, `SupabaseStorageBackend`
+(real, `httpx`-based: `ensure_bucket`/`upload`/`exists` against Storage's
+REST API, bucket defaults to `"sources"` per SS I.2's own worked-example
+paths, created PRIVATE not public), `FakeStorageBackend` (in-memory, for
+every non-live test).
+
+`ingest/capture.py`:
+- `fetch_source`: a normal browser `User-Agent` (standard, benign
+  practice for a legitimate content-fetching tool -- not an attempt to
+  defeat bot detection; the whole point of the manual-`--file` fallback
+  below is what happens when a page still blocks it), a `Content-Length`
+  check that catches a connection cut short in transit before ever
+  looking at PDF internals, and a `.pdf`-URL-that-comes-back-non-PDF
+  check (the exact "bot-wall HTML instead of the document" shape SBI's
+  own Aurum benefits page produces) -- all three return a clear `Fetch
+  Result.error`, never raise, so `capture_source` decides what's fatal.
+- `verify_pdf`: parses via `pypdf`; a totally unparseable file (a real
+  truncated-download shape -- PDF structure keeps its xref/trailer at
+  the END of the file, so a cut-short transfer almost always corrupts
+  it) is a HARD failure. A file that parses but whose own "Page X of Y"
+  text (scanned across every page, comparing against the LARGEST total
+  seen if a document has more than one -- the conservative direction) 
+  doesn't match the actual parsed page count is a WARNING, not a hard
+  failure: still stored (partial evidence beats none) but flagged loudly
+  in the CLI output and written onto the bundle entry as `_capture_
+  warning`, so it can never be silently mistaken for a complete capture
+  later.
+- `capture_source`/`capture_bundle`: fetch-OR-accept-`--file`, never
+  fetch-only. Idempotent by default (a source with both fields already
+  set is skipped) -- `--force` re-captures. Storage path convention:
+  `sources/{issuer_key}/{source_key}-{captured_at}.{ext}`, matching SS
+  I.2's own example exactly. Re-serializes the bundle JSON on write-back
+  (`json.dumps(..., indent=2)`) -- reflows array formatting throughout
+  the file, a real but harmless diff, called out in the module docstring
+  and the CLI output rather than left as a silent surprise.
+- `sync_captured_sources_to_db`: the one function that touches Postgres
+  -- for a source `ingest link`ed BEFORE this tool existed (CASHBACK's
+  own situation). Matches by URL (the same dedup key `ingest link`
+  itself uses); a source with no matching DB row is silently skipped,
+  not an error -- that's the NORMAL case going forward (capture runs
+  BEFORE link).
+
+`ingest/cli.py` gained the `capture` subcommand (`--source`, `--file
+KEY=path`, `--force`, `--sync-db`) -- five subcommands now, one per
+Part I pipeline stage, run in that order.
+
+### Verification
+
+`tests/test_ingest_capture.py` (23 tests, no network/DB): `fetch_source`
+against `httpx.MockTransport` (200/403/truncated-content-length/bot-wall-
+HTML/network-error, all real request/response shaping, zero real HTTP);
+`verify_pdf` against a real minimal PDF built with `pypdf.PdfWriter` for
+the parse/page-count path, and a mocked `PdfReader` for the text-scanning
+path (`PdfWriter` has no API to draw real text onto a page -- decoupling
+"does the regex/mismatch logic work" from "can this test construct a PDF
+with extractable text" on purpose, not a coverage shortcut) -- includes
+the exact HDFC-49-page-partial shape (`Page 12 of 49` parsed, `page_
+count=12`) and the multiple-different-totals case; `capture_source`/
+`capture_bundle` against `FakeStorageBackend` with injected fetchers --
+fetch-then-store, fetch-failure raises with the exact `--file` remedy
+named, manual-file fallback, hard failure on an unparseable PDF, stores-
+but-warns on a mismatch, idempotency, `--force`, per-key restriction,
+per-key manual files, unknown-key/no-sources refusals.
+
+`tests/test_ingest_capture_sync.py` (4 tests, live DB, disposable `zz_
+test_` fixtures): updates the matching row by URL; skips a source not
+captured in the current bundle dict (never invents or clears a value);
+skips a source with no matching DB row; and -- the immutability claim's
+functional half -- confirms `sync_captured_sources_to_db`'s own UPDATE
+touches only `sources`, never `card_versions`/`earning_rules` (byte-
+identical before/after). Did NOT attempt to flip a disposable card_
+version to `published` and sync against it live: doing so would either
+permanently pollute the shared catalog (a published row can never be
+deleted, no test-data exemption) or require fighting `sync_captured_
+sources_to_db`'s own internal `conn.commit()` against a savepoint-
+rollback pattern (psycopg3 forbids `commit()`/`rollback()` inside an
+active `Transaction` block) -- both worse than trusting #145's
+already-verified, static trigger-definition evidence directly.
+
+`tests/test_ingest_capture_storage.py` (4 tests, live Supabase Storage,
+skip-if-unreachable): ensure_bucket idempotency, upload-then-exists
+round trip, upsert-overwrite, bad-credentials raises `StorageError`.
+Every object uses a `zz_test_` path and is deleted in teardown.
+
+CLI smoke-tested without credentials configured: `python -m ingest
+capture ingestion/bundle_sbi_cashback.json` fails cleanly with "SUPABASE_
+URL / SUPABASE_SERVICE_ROLE_KEY not set (see compute/.env.example)",
+exit code 2 -- the same clear-refusal posture as every other missing-
+prerequisite case in this CLI.
+
+Full suite: 362/362 green + 5 skipped (335 prior + 23 capture unit tests
++ 4 capture-sync tests; the 4 live-Storage tests skip until Satya adds
+real credentials to `compute/.env`).
+
+**Not yet done, pending real Supabase credentials**: the actual
+retroactive capture of CASHBACK SBI's two sources (`ingest capture
+ingestion/bundle_sbi_cashback.json --sync-db`), and re-confirming `ingest
+lint` on that bundle now passes the source_capture_completeness check
+cleanly -- both queued as the immediate next step once `SUPABASE_URL`/
+`SUPABASE_SERVICE_ROLE_KEY` land in `compute/.env`.
+
+### 146. Credentials landed -- #135/#143 closed for real, and one more
+real bug found only by hitting the live Supabase API
+
+Live-tested the real `SupabaseStorageBackend` before touching CASHBACK
+at all (`tests/test_ingest_capture_storage.py`, previously skipped):
+**found a real bug immediately.** Supabase's Storage API returns HTTP
+**400** (not 404) for a `GET /storage/v1/bucket/{name}` on a bucket that
+doesn't exist yet, with the actual "not found" status buried in the JSON
+body's own `statusCode` field (`{"statusCode":"404","error":"Bucket not
+found",...}`) -- not documented anywhere obvious, found only by running
+the real request. `ensure_bucket`'s literal `resp.status_code == 404`
+check never fired, so bucket creation never happened.
+`_bucket_not_found()` now checks the JSON body's `statusCode`/`error`
+fields when the HTTP status is 400, falling back to a literal 404 too.
+All 4 live Storage tests passed once fixed; the real `sources` bucket
+(private, per #144) now exists.
+
+**Ran `ingest capture ingestion/bundle_sbi_cashback.json --sync-db`
+against the real sources.** Both fetched successfully (no bot-detection
+issue for either, unlike the Aurum benefits page example that motivated
+the manual-`--file` fallback) -- `reward_terms`: 50 pages; `mitc`: 57
+pages. Neither self-declares a total page count anywhere in its text
+(no "Page X of Y" footer), so the mismatch check had nothing to compare
+against -- reported, not silently assumed complete. (The bundle's own
+earlier notes estimated "47pp"/mentioned page 46 from a skim during
+manual review, both close to but not exactly the real 50/57 -- rough
+memory-based page counts from an earlier pass, now superseded by an
+actual parse; not a discrepancy worth chasing, since neither number was
+ever load-bearing for anything.) Objects stored at `sources/sbi_card/
+reward_terms-2026-08-31.pdf` and `sources/sbi_card/mitc-2026-08-31.pdf`;
+the bundle file rewritten in place (array formatting reflowed throughout,
+exactly the harmless-but-visible diff flagged in advance in #144); `--
+sync-db` updated both live `sources` rows, matched by URL.
+
+**Verified every layer independently, not just trusted the CLI's own
+output**: both objects confirmed to actually `exist()` in Storage
+(direct API call); both `sources` rows confirmed updated via a direct
+`SELECT` (`storage_path`/`captured_at`/`last_checked_at` all set);
+`card_versions.status`/`published_at`/`joining_fee`/`annual_fee` and the
+`earning_rules` row count confirmed BYTE-IDENTICAL to before (`published_
+at` matches #142's original timestamp exactly) -- #145's immutability
+claim held in practice, not just in the trigger definitions. `python -m
+ingest lint ingestion/bundle_sbi_cashback.json` now reports **zero
+errors** -- down from 2. `tests/test_ingest_lint.py::test_lint_bundle_
+against_real_sbi_bundle_matches_known_findings` updated to assert
+`report.passed is True` (was: exactly 2 source_capture_completeness
+errors) -- the third and final intended reject->accept flip on this
+bundle this phase (after #130 and #137), not a regression.
+
+Full suite: 366/366 green + 1 skipped (362 prior + 4 live-Storage tests
+now passing instead of skipping, net of the one lint-test update above).
+
+CASHBACK SBI's ingestion is now, genuinely, complete end to end: every
+source properly captured (SS I.1), every fact cited (SS I.0), every
+citation reviewed and approved by a human (SS I.5), the card_version
+published (SS I.4/I.8) and live-served correctly. Every gap Phase 5's
+own tooling found along the way (#111/#114, #110, #129, #134, #135/#143)
+is closed for this card specifically -- what remains open (§C.11's
+battery, the currency-review-scope question from #141, devaluation
+tooling from SS I.6) is either infrastructure for FUTURE cards or a
+product decision, not anything left undone for this one.

@@ -101,7 +101,10 @@ def _bundle(card_key=CARD_KEY, currency_key=CURRENCY_KEY, source_url=SOURCE_URL,
         "currency": currency_key,
         "effective_from": "2026-01-01",
         "sources": {
-            "src1": {"url": source_url, "source_type": source_type, "title": "ZZ Test Source"},
+            "src1": {
+                "url": source_url, "source_type": source_type, "title": "ZZ Test Source",
+                "storage_path": "sources/zz_test/src1.pdf", "captured_at": "2026-01-01",
+            },
         },
         "currencies": [
             {

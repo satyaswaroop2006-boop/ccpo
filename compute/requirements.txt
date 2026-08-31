@@ -6,4 +6,6 @@ pulp>=2.8          # inner MILP (HiGHS via highspy, CBC bundled fallback)
 highspy>=1.7
 pytest>=8.0
 pydantic>=2.6
-httpx>=0.27       # FastAPI TestClient (app/ integration tests)
+httpx>=0.27       # FastAPI TestClient (app/ integration tests); also ingest/capture.py's
+                  # fetch + Supabase Storage REST client (Part I SS I.1)
+pypdf>=4.0        # ingest/capture.py: PDF page-count / truncation verification (SS I.1)

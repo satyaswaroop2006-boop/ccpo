@@ -87,7 +87,10 @@ def _bundle():
     return {
         "issuer_key": ISSUER_KEY, "key": CARD_KEY, "name": "ZZ Test Publish Card", "network": "visa",
         "currency": CURRENCY_KEY, "effective_from": "2026-01-01",
-        "sources": {"src1": {"url": SOURCE_URL, "source_type": "mitc", "title": "ZZ Test MITC"}},
+        "sources": {"src1": {
+            "url": SOURCE_URL, "source_type": "mitc", "title": "ZZ Test MITC",
+            "storage_path": "sources/zz_test/src1.pdf", "captured_at": "2026-01-01",
+        }},
         "currencies": [
             {"key": CURRENCY_KEY,
              "routes": [{"key": "stmt", "route_type": "statement_credit", "ratio": 1.0, "source_refs": ["src1"]}],

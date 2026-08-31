@@ -1,5 +1,6 @@
-"""`ingest` CLI (Part I SS I.9). All four subcommands SS I.9 specifies are
-now built: `lint`, `link`, `review-queue`, `publish`.
+"""`ingest` CLI (Part I SS I.9 plus SS I.1's CAPTURE stage). Five
+subcommands: `capture`, `lint`, `link`, `review-queue`, `publish` --
+one per pipeline stage, run in that order.
 
 `review-queue` is read-only -- it never flips `reviewer_status`. That
 flip is a human act SS I.5 requires stay outside any automated tool
@@ -9,6 +10,9 @@ reviewer do it with a dropdown, so this CLI doesn't need its own
 mutation command to make the workflow usable.
 
 Usage:
+    python -m ingest capture compute/ingestion/bundle_sbi_cashback.json
+    python -m ingest capture compute/ingestion/bundle_sbi_cashback.json --source reward_terms --file reward_terms=./downloaded.pdf
+    DATABASE_URL=postgresql://... python -m ingest capture ... --sync-db
     python -m ingest lint compute/ingestion/bundle_sbi_cashback.json
     DATABASE_URL=postgresql://... python -m ingest link compute/ingestion/bundle_sbi_cashback.json
     DATABASE_URL=postgresql://... python -m ingest review-queue
@@ -19,16 +23,82 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 from ingest.bundle import load_ingestion_bundle
+from ingest.capture import CaptureError, CaptureResult, capture_bundle, sync_captured_sources_to_db
 from ingest.lint import LintReport, lint_bundle
 from ingest.link import LinkError, LinkResult, link_bundle
 from ingest.publish import PublishError, PublishResult, publish_card_version
 from ingest.review import ReviewQueueGroup, build_review_queue
 
 load_dotenv()  # compute/.env's DATABASE_URL, local-dev convenience -- same as app/main.py
+
+
+def _storage_from_env():
+    from ingest.storage import SupabaseStorageBackend
+
+    base_url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not base_url or not key:
+        raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set (see compute/.env.example)")
+    return SupabaseStorageBackend(base_url=base_url, service_role_key=key)
+
+
+def _print_capture_results(results: list[CaptureResult], bundle_path: str) -> None:
+    print(f"ingest capture: {bundle_path}")
+    if not results:
+        print("Nothing to do -- every requested source already has storage_path/captured_at (use --force to re-capture).")
+        return
+    for r in results:
+        print(f"  {r.source_key}: {r.method}, stored at {r.storage_path} (captured_at={r.captured_at})")
+        if r.pdf is not None:
+            print(f"    pdf: {r.pdf.note}")
+        for w in r.warnings:
+            print(f"    [warning] {w}")
+    print()
+    print(f"bundle file updated with the new storage_path/captured_at ({len(results)} source(s)).")
+
+
+def cmd_capture(args: argparse.Namespace) -> int:
+    manual_files: dict[str, Path] = {}
+    for spec in args.file or []:
+        if "=" not in spec:
+            print(f"ingest capture: --file must be KEY=path, got {spec!r}", file=sys.stderr)
+            return 2
+        key, _, path = spec.partition("=")
+        manual_files[key] = Path(path)
+
+    try:
+        storage = _storage_from_env()
+    except RuntimeError as e:
+        print(f"ingest capture: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        results = capture_bundle(
+            Path(args.bundle_path), storage, source_keys=args.source, manual_files=manual_files, force=args.force,
+        )
+    except CaptureError as e:
+        print(f"ingest capture: REFUSED -- {e}", file=sys.stderr)
+        return 1
+
+    _print_capture_results(results, args.bundle_path)
+
+    if args.sync_db:
+        try:
+            conn = _connect()
+        except RuntimeError as e:
+            print(f"ingest capture --sync-db: {e}", file=sys.stderr)
+            return 2
+        bundle = load_ingestion_bundle(args.bundle_path)
+        with conn:
+            updated = sync_captured_sources_to_db(conn, bundle)
+        print(f"--sync-db: updated {len(updated)} live sources row(s): {updated}")
+
+    return 0
 
 
 def _print_report(report: LintReport, bundle_path: str) -> None:
@@ -167,6 +237,16 @@ def cmd_publish(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ingest", description="Part I SS I.9 ingestion tooling.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    capture_parser = subparsers.add_parser(
+        "capture", help="Run CAPTURE (SS I.1): fetch/store each source's snapshot, record storage_path/captured_at."
+    )
+    capture_parser.add_argument("bundle_path", help="Path to an ingestion bundle JSON file.")
+    capture_parser.add_argument("--source", action="append", help="Restrict to this source key (repeatable). Default: all declared sources.")
+    capture_parser.add_argument("--file", action="append", help="KEY=path -- use an already-downloaded file for source KEY instead of fetching (repeatable).")
+    capture_parser.add_argument("--force", action="store_true", help="Re-capture sources that already have storage_path/captured_at.")
+    capture_parser.add_argument("--sync-db", action="store_true", help="Also push storage_path/captured_at into the live sources row for an already-linked card (matched by URL).")
+    capture_parser.set_defaults(func=cmd_capture)
 
     lint_parser = subparsers.add_parser("lint", help="Run LINT (SS I.4) on a bundle file -- no database access.")
     lint_parser.add_argument("bundle_path", help="Path to an ingestion bundle JSON file.")

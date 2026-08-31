@@ -14,17 +14,26 @@ import pytest
 
 from ingest.bundle import citable_entities, declared_sources, load_ingestion_bundle, source_refs
 from ingest.cli import main as ingest_main
-from ingest.lint import check_engine_compatibility, check_provenance_completeness, lint_bundle
+from ingest.lint import (
+    check_engine_compatibility,
+    check_provenance_completeness,
+    check_source_capture_completeness,
+    lint_bundle,
+)
 
 INGESTION_DIR = Path(__file__).resolve().parent.parent / "ingestion"
 
 
 def _minimal_compliant_bundle() -> dict:
-    """Every rule-bearing entity cited, every selector engine-supported --
-    should pass both lint checks cleanly."""
+    """Every rule-bearing entity cited, every selector engine-supported,
+    every source properly captured -- should pass all three lint checks
+    cleanly."""
     return {
         "key": "test_card", "name": "Test Card", "network": "visa", "currency": "test_inr",
-        "sources": {"src1": {"source_type": "mitc", "url": "https://example.com/mitc.pdf"}},
+        "sources": {"src1": {
+            "source_type": "mitc", "url": "https://example.com/mitc.pdf",
+            "storage_path": "sources/test/src1.pdf", "captured_at": "2026-01-01",
+        }},
         "version": {"joining_fee": 0, "annual_fee": 0, "forex_markup": 0.035, "source_refs": ["src1"]},
         "currencies": [
             {"key": "test_inr", "source_refs": ["src1"], "routes": [
@@ -139,22 +148,75 @@ def test_engine_compatibility_flags_bundle_from_dict_translation_failure():
 
 
 # ---------------------------------------------------------------------------
+# check_source_capture_completeness (Part I SS I.1, docs/DECISIONS.md #143)
+# ---------------------------------------------------------------------------
+
+def test_source_capture_completeness_passes_when_storage_path_and_captured_at_present():
+    assert check_source_capture_completeness(_minimal_compliant_bundle()) == []
+
+
+def test_source_capture_completeness_flags_a_bare_url_source():
+    bundle = _minimal_compliant_bundle()
+    bundle["sources"]["src1"] = {"source_type": "mitc", "url": "https://example.com/mitc.pdf"}
+    issues = check_source_capture_completeness(bundle)
+    assert len(issues) == 1
+    assert issues[0].entity == "sources (src1)"
+    assert "storage_path" in issues[0].message and "captured_at" in issues[0].message
+
+
+def test_source_capture_completeness_flags_only_the_missing_field():
+    bundle = _minimal_compliant_bundle()
+    del bundle["sources"]["src1"]["captured_at"]
+    issues = check_source_capture_completeness(bundle)
+    assert len(issues) == 1
+    assert "missing ['captured_at']" in issues[0].message  # storage_path is present, not also flagged
+
+
+def test_source_capture_completeness_checks_every_declared_source_independently():
+    bundle = _minimal_compliant_bundle()
+    bundle["sources"]["src2"] = {"source_type": "faq", "url": "https://example.com/faq"}  # no capture fields
+    issues = check_source_capture_completeness(bundle)
+    assert len(issues) == 1  # src1 (compliant) untouched; only src2 flagged
+    assert issues[0].entity == "sources (src2)"
+
+
+def test_source_capture_completeness_accepts_the_underscore_sources_spelling_too():
+    bundle = _minimal_compliant_bundle()
+    bundle["_sources"] = bundle.pop("sources")
+    del bundle["_sources"]["src1"]["storage_path"]
+    issues = check_source_capture_completeness(bundle)
+    assert len(issues) == 1
+    assert issues[0].entity == "sources (src1)"
+
+
+def test_lint_bundle_now_runs_three_checks():
+    report = lint_bundle(_minimal_compliant_bundle())
+    assert report.checks_run == ("provenance_completeness", "engine_compatibility", "source_capture_completeness")
+    assert report.passed is True
+
+
+# ---------------------------------------------------------------------------
 # lint_bundle against the real, previously-hand-reviewed SBI bundle
 # ---------------------------------------------------------------------------
 
 def test_lint_bundle_against_real_sbi_bundle_matches_known_findings():
-    """Locks in the exact findings docs/DECISIONS.md records by hand. The
-    bundle's two exclusions (mcc_include, txn_max) USED to fail engine_
-    compatibility -- as of Phase 5 Task A (docs/DECISIONS.md #130) both
-    selector fields are engine-supported, so lint now accepts them. The
-    currency/route citation gap (#129) USED to fail provenance_
-    completeness -- Satya resolved it by finding a real citation
-    (reward_terms Sec 11.1(a) + FAQ 12/14, docs/DECISIONS.md #137) rather
-    than amending Part I to exempt it, so both entities now cite a source
-    too. The bundle passes cleanly today -- an intended reject->accept
-    flip both times, not a regression. If this tool ever finds something
-    different again, that's a real change worth investigating, not noise
-    to silence."""
+    """Locks in the exact findings docs/DECISIONS.md records by hand.
+    Three gaps this bundle used to fail on, all now genuinely closed:
+    the two exclusions (mcc_include, txn_max) used to fail engine_
+    compatibility until Phase 5 Task A added engine support (#130); the
+    currency/route citation gap used to fail provenance_completeness
+    until Satya found a real citation (reward_terms Sec 11.1(a) + FAQ
+    12/14, #137); and both sources used to fail the source_capture_
+    completeness check (#143) until `ingest capture` actually fetched
+    and snapshotted them into Supabase Storage, then `--sync-db` pushed
+    `storage_path`/`captured_at` onto the live (already-published,
+    immutable) `sources` rows (#144/#146) -- confirmed live afterward:
+    both objects exist in Storage, both DB rows updated, and CASHBACK's
+    `card_versions`/`earning_rules` rows are byte-identical to before
+    (sources carries no immutability trigger, verified against 0001_
+    init.sql directly, #145). The bundle passes cleanly today. If this
+    tool ever finds an error again, that's a real regression worth
+    investigating, not noise to silence."""
     bundle = load_ingestion_bundle(INGESTION_DIR / "bundle_sbi_cashback.json")
     report = lint_bundle(bundle)
 
