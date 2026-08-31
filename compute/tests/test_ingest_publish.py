@@ -242,6 +242,7 @@ def test_publish_succeeds_and_reports_scenario_results_without_leaving_a_permane
             assert len(publish_result.scenario_results) == 1
             assert publish_result.scenario_results[0].passed is True
             assert publish_result.scenario_results[0].diffs == ()
+            assert publish_result.superseded_version_id is None  # v1 -- nothing to supersede
 
             with conn.cursor() as cur:
                 cur.execute("select status, published_at from card_versions where id = %s", (result.card_version_id,))

@@ -8,6 +8,17 @@ an `effective_to`) from this point on, a materially heavier action than
 condition at once (not just the first), rather than publishing partially
 or silently skipping a check -- the same posture SS I.9 specifies.
 
+**Devaluations (SS I.6 step 4)**: if the card_version being published has
+version_no > 1, publishing it ALSO closes out its immediate predecessor
+in the same transaction -- the predecessor's `effective_to` is set to
+one day before this version's own `effective_from`, so the two versions'
+coverage never overlaps and leaves no gap. This is exactly the mutation
+`0001_init.sql`'s own immutability trigger carves out as permitted on an
+already-published row ("only status/effective_to may change") -- nothing
+about the predecessor's rule data is touched, and it remains queryable
+forever (SS I.6: "both versions remain queryable forever; nothing is
+deleted or overwritten").
+
 SS I.4's gate, restated as three checks this module actually runs:
 
 1. **Every source_link on the card_version and its children is
@@ -98,6 +109,7 @@ class PublishResult:
     card_key: str
     card_version_id: str
     scenario_results: tuple[ScenarioResult, ...]
+    superseded_version_id: str | None = None  # Part I SS I.6 step 4, when this publish closes out a predecessor
 
 
 def _j(x: Any) -> str:
@@ -466,11 +478,35 @@ def publish_card_version(conn: psycopg.Connection, card_version_id: Any, golden_
         detail = "\n  - ".join(problems)
         raise PublishError(f"publish gate failed for card_version {card_version_id} (card {card_key!r}):\n  - {detail}")
 
+    superseded_id = None
     with conn.transaction():
         with conn.cursor() as cur:
+            cur.execute(
+                "select card_id, version_no, effective_from from card_versions where id = %s",
+                (card_version_id,),
+            )
+            this_card_id, this_version_no, this_effective_from = cur.fetchone()
+
+            cur.execute(
+                "select id from card_versions where card_id = %s and status = 'published' and version_no < %s"
+                " order by version_no desc limit 1",
+                (this_card_id, this_version_no),
+            )
+            predecessor = cur.fetchone()
+
             cur.execute(
                 "update card_versions set status = 'published', published_at = now() where id = %s",
                 (card_version_id,),
             )
 
-    return PublishResult(card_key=card_key, card_version_id=str(card_version_id), scenario_results=tuple(scenario_results))
+            if predecessor is not None:
+                superseded_id = str(predecessor[0])
+                cur.execute(
+                    "update card_versions set effective_to = %s::date - interval '1 day' where id = %s",
+                    (this_effective_from, predecessor[0]),
+                )
+
+    return PublishResult(
+        card_key=card_key, card_version_id=str(card_version_id), scenario_results=tuple(scenario_results),
+        superseded_version_id=superseded_id,
+    )

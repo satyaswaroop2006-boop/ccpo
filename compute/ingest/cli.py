@@ -132,14 +132,18 @@ def cmd_lint(args: argparse.Namespace) -> int:
 
 def _print_link_result(result: LinkResult, bundle_path: str) -> None:
     print(f"ingest link: {bundle_path}")
-    print(f"card {result.card_key!r} linked -- card_id={result.card_id}, card_version_id={result.card_version_id}")
+    print(f"card {result.card_key!r} linked -- card_id={result.card_id}, card_version_id={result.card_version_id}, version_no={result.version_no}")
     print(f"sources: {result.sources_inserted} inserted, {result.sources_reused} reused (deduped by URL)")
     for entity_type, count in result.entity_counts.items():
         print(f"  {entity_type}: {count}")
     print(f"source_links inserted: {result.source_links_inserted} (all reviewer_status='unreviewed')")
     print()
-    print("card_version status='draft' -- run `ingest review-queue` next, then a human review pass, "
-          "before `ingest publish`.")
+    if result.version_no > 1:
+        print(f"card_version status='draft' (v{result.version_no}, supersedes v{result.version_no - 1} on publish) -- "
+              "run `ingest review-queue` next, then a human review pass, before `ingest publish`.")
+    else:
+        print("card_version status='draft' -- run `ingest review-queue` next, then a human review pass, "
+              "before `ingest publish`.")
 
 
 def _connect():
@@ -166,7 +170,7 @@ def cmd_link(args: argparse.Namespace) -> int:
     bundle = load_ingestion_bundle(args.bundle_path)
     try:
         with conn:
-            result = link_bundle(bundle, conn)
+            result = link_bundle(bundle, conn, new_version=args.new_version)
     except LinkError as e:
         print(f"ingest link: REFUSED -- {e}", file=sys.stderr)
         return 1
@@ -214,6 +218,9 @@ def _print_publish_result(result: PublishResult) -> None:
     print()
     print("PUBLISHED -- status='published', published_at=now(). This is IRREVERSIBLE from here "
           "(Part D Decision 2): only 'deprecated' or a new version can follow.")
+    if result.superseded_version_id:
+        print(f"Predecessor card_version {result.superseded_version_id} closed out -- its effective_to is now "
+              "set to the day before this version's effective_from (Part I SS I.6 step 4).")
 
 
 def cmd_publish(args: argparse.Namespace) -> int:
@@ -256,6 +263,11 @@ def build_parser() -> argparse.ArgumentParser:
         "link", help="Run LINT then LINK (SS I.4): inserts the card/sources/source_links as status='draft'."
     )
     link_parser.add_argument("bundle_path", help="Path to an ingestion bundle JSON file.")
+    link_parser.add_argument(
+        "--new-version", action="store_true",
+        help="Devaluation flow (SS I.6): supersede this card's latest PUBLISHED version with a new draft "
+             "version_no+1, instead of refusing because the card already exists.",
+    )
     link_parser.set_defaults(func=cmd_link)
 
     review_parser = subparsers.add_parser(

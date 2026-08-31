@@ -11,6 +11,24 @@ no reason to do for its synthetic fixtures. Runs `ingest lint`'s full
 battery first and refuses to touch the database at all if it fails --
 "LINK never runs against a bundle LINT rejects" (I.4's own ordering).
 
+`new_version=True` (CLI: `--new-version`) is Part I SS I.6's devaluation
+flow, step 2: "a new ingestion bundle is drafted for a new card_versions
+row... typically copied from the predecessor bundle and edited at
+exactly the changed fields." The default (`new_version=False`) still
+refuses outright if the card already exists -- SS I.6 is an explicit,
+deliberate act (the operator states they mean to supersede a published
+version), never inferred from "oh, the key happens to already exist"
+(which could just as easily be an accidental double-run of the same
+bundle). `cards.name`/`network`/`tier`/`segment` live on the CARD, not
+per-version (0001_init.sql's own schema) -- a new-version bundle reuses
+the existing `cards` row rather than inserting a second one, and its
+`name` must match exactly (a mismatch almost always means the wrong
+bundle file, caught here rather than silently accepted). The card's
+LATEST version must already be `published` before a new one can be
+created on top of it -- if it's still `draft`, there's nothing to
+"devalue" yet; fix that draft directly instead of stacking another
+version on an unpublished one.
+
 The whole insert is one Postgres transaction (`conn.transaction()`):
 either every row for this card lands, or none does. This is the FIRST
 `compute/` code that writes to the catalog tables via anything other than
@@ -76,6 +94,7 @@ class LinkResult:
     card_key: str
     card_id: str
     card_version_id: str
+    version_no: int
     sources_inserted: int
     sources_reused: int
     source_links_inserted: int
@@ -105,14 +124,54 @@ def _find_issuer_id(cur, issuer_key: str) -> Any:
     return row[0]
 
 
-def _refuse_if_card_exists(cur, card_key: str) -> None:
-    cur.execute("select id from cards where key = %s", (card_key,))
-    if cur.fetchone() is not None:
+def _resolve_card_and_version_no(cur, bundle: dict[str, Any], new_version: bool) -> tuple[Any, int, bool]:
+    """Returns (existing_card_id_or_None, version_no, need_to_insert_card_row)."""
+    cur.execute("select id, name from cards where key = %s", (bundle["key"],))
+    row = cur.fetchone()
+
+    if not new_version:
+        if row is not None:
+            raise LinkError(
+                f"card {bundle['key']!r} already exists -- ingest link's default mode only creates the "
+                "FIRST version of a new card. Pass --new-version to supersede its latest published "
+                "version (Part I SS I.6's devaluation flow) if that's genuinely what this bundle is; "
+                "otherwise this looks like an accidental re-run of an already-linked bundle"
+            )
+        return None, 1, True
+
+    if row is None:
         raise LinkError(
-            f"card {card_key!r} already exists -- ingest link only creates the FIRST version of a "
-            "new card. A rule change is a new card_versions row (Part I SS I.6's devaluation flow), "
-            "not re-linking the same bundle -- that flow isn't built yet"
+            f"--new-version given but card {bundle['key']!r} does not exist yet -- there's nothing to "
+            "supersede. Remove --new-version to link this bundle as the card's first version"
         )
+    card_id, existing_name = row
+    if bundle["name"] != existing_name:
+        raise LinkError(
+            f"--new-version: bundle name {bundle['name']!r} doesn't match the existing card's name "
+            f"{existing_name!r} -- cards.name is shared across every version, not per-version data "
+            "(0001_init.sql). Double check this is the right bundle before re-running"
+        )
+
+    cur.execute(
+        "select version_no, status, effective_from from card_versions where card_id = %s"
+        " order by version_no desc limit 1",
+        (card_id,),
+    )
+    latest_version_no, latest_status, latest_effective_from = cur.fetchone()
+    if latest_status != "published":
+        raise LinkError(
+            f"card {bundle['key']!r}'s latest version (v{latest_version_no}) has status={latest_status!r}, "
+            "not 'published' -- there's nothing published yet to supersede. Fix that draft directly "
+            "instead of stacking a new version on top of an unpublished one"
+        )
+    if bundle["effective_from"] <= latest_effective_from.isoformat():
+        raise LinkError(
+            f"--new-version: this bundle's effective_from ({bundle['effective_from']!r}) must be AFTER "
+            f"the version it supersedes (v{latest_version_no}, effective_from={latest_effective_from.isoformat()!r}) "
+            "-- Part I SS I.6's version history is chronological, an earlier or same-day effective date "
+            "would produce an invalid (or overlapping) date range on publish"
+        )
+    return card_id, latest_version_no + 1, False
 
 
 def _resolve_currency(cur, issuer_id: Any, currency: dict[str, Any]) -> tuple[Any, bool, list[tuple[dict, Any]]]:
@@ -154,7 +213,7 @@ def _resolve_currency(cur, issuer_id: Any, currency: dict[str, Any]) -> tuple[An
     return currency_id, True, new_routes
 
 
-def link_bundle(bundle: dict[str, Any], conn: psycopg.Connection) -> LinkResult:
+def link_bundle(bundle: dict[str, Any], conn: psycopg.Connection, new_version: bool = False) -> LinkResult:
     report = lint_bundle(bundle)
     if not report.passed:
         raise LinkError(
@@ -166,7 +225,7 @@ def link_bundle(bundle: dict[str, Any], conn: psycopg.Connection) -> LinkResult:
     with conn.transaction():
         with conn.cursor() as cur:
             issuer_id = _find_issuer_id(cur, bundle["issuer_key"])
-            _refuse_if_card_exists(cur, bundle["key"])
+            existing_card_id, version_no, need_new_card = _resolve_card_and_version_no(cur, bundle, new_version)
 
             sources = declared_sources(bundle)
             source_id_by_key: dict[str, Any] = {}
@@ -206,9 +265,14 @@ def link_bundle(bundle: dict[str, Any], conn: psycopg.Connection) -> LinkResult:
                         )
                     confidence = default_confidence_for_source_type(sources[ref]["source_type"])
                     cur.execute(
-                        "insert into source_links (source_id, entity_type, entity_id, confidence)"
-                        " values (%s,%s,%s,%s)",
-                        (source_id, entity_type, entity_id, confidence),
+                        "insert into source_links (source_id, entity_type, entity_id, confidence, previous_rule_note)"
+                        " values (%s,%s,%s,%s,%s)",
+                        # previous_rule_note: SS I.6 step 3 -- "each changed field's new source_links
+                        # row carries previous_rule_note describing what it superseded". Part I never
+                        # pins down a bundle JSON spelling for this (it's purely a DB-column
+                        # description); read directly under the column's own name rather than
+                        # inventing a new underscore-prefixed convention for one field.
+                        (source_id, entity_type, entity_id, confidence, raw.get("previous_rule_note")),
                     )
                     source_links_inserted += 1
 
@@ -222,20 +286,23 @@ def link_bundle(bundle: dict[str, Any], conn: psycopg.Connection) -> LinkResult:
             for route_dict, route_id in new_routes:
                 link_entity("redemption_route", route_id, route_dict)
 
-            cur.execute(
-                "insert into cards (issuer_id, key, name, network, tier, segment)"
-                " values (%s,%s,%s,%s,%s,%s) returning id",
-                (issuer_id, bundle["key"], bundle["name"], bundle["network"], bundle.get("tier"), bundle.get("segment")),
-            )
-            card_id = cur.fetchone()[0]
+            if need_new_card:
+                cur.execute(
+                    "insert into cards (issuer_id, key, name, network, tier, segment)"
+                    " values (%s,%s,%s,%s,%s,%s) returning id",
+                    (issuer_id, bundle["key"], bundle["name"], bundle["network"], bundle.get("tier"), bundle.get("segment")),
+                )
+                card_id = cur.fetchone()[0]
+            else:
+                card_id = existing_card_id
 
             v = bundle.get("version", {})
             cur.execute(
                 "insert into card_versions (card_id, version_no, effective_from, joining_fee,"
                 " annual_fee, gst_rate, forex_markup, currency_id)"
-                " values (%s,1,%s,%s,%s,%s,%s,%s) returning id",
+                " values (%s,%s,%s,%s,%s,%s,%s,%s) returning id",
                 (
-                    card_id, bundle["effective_from"], v.get("joining_fee", 0), v.get("annual_fee", 0),
+                    card_id, version_no, bundle["effective_from"], v.get("joining_fee", 0), v.get("annual_fee", 0),
                     v.get("gst_rate", 0.18), v.get("forex_markup", 0.035), currency_id,
                 ),
             )
@@ -344,7 +411,7 @@ def link_bundle(bundle: dict[str, Any], conn: psycopg.Connection) -> LinkResult:
             entity_counts["surcharges"] = len(surcharges)
 
     return LinkResult(
-        card_key=bundle["key"], card_id=str(card_id), card_version_id=str(cv_id),
+        card_key=bundle["key"], card_id=str(card_id), card_version_id=str(cv_id), version_no=version_no,
         sources_inserted=n_inserted, sources_reused=n_reused,
         source_links_inserted=source_links_inserted, entity_counts=entity_counts,
         lint_report=report,

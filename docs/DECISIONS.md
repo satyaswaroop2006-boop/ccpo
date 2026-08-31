@@ -4231,3 +4231,122 @@ is closed for this card specifically -- what remains open (§C.11's
 battery, the currency-review-scope question from #141, devaluation
 tooling from SS I.6) is either infrastructure for FUTURE cards or a
 product decision, not anything left undone for this one.
+
+## Phase 5 -- devaluation flow (Part I SS I.6)
+
+### 147. `ingest link --new-version` / `ingest publish`'s predecessor-
+closing: no new subcommand, SS I.6 itself says "like any other"
+
+SS I.9's tool list has no `ingest devalue` -- SS I.6 step 4 explicitly
+says a devaluation "goes through LINT/LINK/REVIEW/PUBLISH (I.4) like any
+other," meaning devaluation is a MODE of the existing tools, not a sixth
+one. Built accordingly: `link_bundle` gained `new_version: bool = False`
+(CLI `--new-version`), and `publish_card_version` unconditionally checks
+for a predecessor to close out, no flag needed (SS I.6 step 4 describes
+this as an automatic consequence of publishing a successor, not an
+opt-in).
+
+**Why `--new-version` must be explicit, never inferred.** The default
+(`new_version=False`) still refuses outright the moment `cards.key`
+already exists -- exactly the guard `ingest link` has had since #133,
+unchanged. Auto-detecting "the key exists, so this must be a
+devaluation" would be actively dangerous: an accidental double-run of
+the SAME bundle (a real, plausible operator mistake) would silently
+create a second, near-duplicate version instead of refusing. SS I.6 is
+framed as a deliberate act by whoever's running the tool; the flag makes
+that intent explicit rather than inferred from ambiguous state.
+
+**What a new version reuses vs. re-inserts, read directly off `0001_
+init.sql`'s own column placement, not assumed.** `cards.name`/`network`/
+`tier`/`segment` live on the CARD row, not per-version -- a devaluation
+bundle reuses the existing `cards` row rather than inserting a second
+one (with `bundle["name"]` validated to match exactly; a mismatch almost
+always means the wrong bundle file, caught here rather than silently
+accepted as if the card's marketing name legitimately changed via a rate
+devaluation). `reward_currencies`/`redemption_routes` already resolve by
+find-or-reuse-by-key (#134) -- unchanged, works identically whether this
+is version 1 or version 12. Only `card_versions` (a fresh row, `version_
+no = latest + 1`) and its six child rule tables are genuinely NEW data
+per version, exactly the granularity Part D's Decision 3 describes
+("Versioning unit = the card_version bundle").
+
+**Guards added, each catching a real mistake class rather than trusting
+the operator to get it right:**
+- `--new-version` on a card that doesn't exist yet -- nothing to
+  supersede, remove the flag to link a first version instead.
+- The card's LATEST version must already be `status='published'` --
+  otherwise there's nothing published yet to devalue; refuses rather
+  than silently stacking a second draft on an unpublished first one
+  (which would make "the latest version" ambiguous for review/publish
+  purposes).
+- The new bundle's `effective_from` must be strictly AFTER the
+  predecessor's -- checked at LINK time, not left to surface as a raw
+  Postgres CHECK-constraint violation at PUBLISH time (`effective_to >=
+  effective_from` would fail non-obviously otherwise; caught early with
+  a clear message instead).
+
+**The predecessor's `effective_to`, computed as `new.effective_from - 1
+day`, not `new.effective_from` itself.** Setting it to the SAME day as
+the new version's start would make both versions simultaneously "current"
+in `current_card_versions` for that one day (its own filter is `effective_
+from <= current_date and (effective_to is null or effective_to >=
+current_date)`, both inclusive) -- a real, if narrow, correctness bug
+for anything consuming "the live version" as a singular concept.
+`effective_from - 1 day` leaves no gap and no overlap: verified directly
+in the full-cycle test (`current_card_versions` resolves to exactly one
+row, the new version, not both/neither). Confirmed this mutation is
+schema-sanctioned, not something being smuggled past the immutability
+trigger: `forbid_published_mutation()`'s own logic explicitly compares
+`to_jsonb(new) - 'status' - 'effective_to'` against the old row --
+`effective_to` (and `status`) are the two fields the trigger itself
+already treats as legitimately mutable on a published row.
+
+**`source_links.previous_rule_note`** (SS I.6 step 3: "each changed
+field's new source_links row carries previous_rule_note describing what
+it superseded") is now threaded through `link_entity` -- read directly
+under that column's own name, since Part I never specifies a bundle JSON
+spelling for it (it's described purely as a DB-column fact, not a
+drafting-format detail), and inventing a new underscore-prefixed
+convention for one field wasn't worth it when the column name itself is
+already unambiguous.
+
+### Verification
+
+`tests/test_ingest_devaluation.py` (7 tests, disposable `zz_test_`
+fixtures): `--new-version` refuses on a nonexistent card, a still-draft
+predecessor, a name mismatch, and a non-later `effective_from`; the
+default (no flag) still refuses when the card exists, unchanged; a
+successful `--new-version` link reuses the existing `cards` row and
+`reward_currencies` row (not duplicated) while creating a genuinely
+second `card_versions` row; and the full cycle -- link v1, approve,
+publish v1, link v2 with `--new-version` (a real rate change, 1% ->
+2%), approve, publish v2 -- confirms v1 stays `published` (both remain
+queryable, per SS I.6) with `effective_to` set to exactly one day before
+v2's `effective_from`, v2 is `published` with `effective_to` still NULL
+(open-ended, the current version), and `current_card_versions` resolves
+to exactly v2, not both or neither.
+
+Testing the full cycle needed BOTH publishes to be genuinely real within
+the test (`--new-version`'s own guard checks the predecessor's ACTUAL
+`status`, not a simulated one) -- solved with the same savepoint-
+rollback pattern `test_ingest_publish.py` already established (#141):
+the whole cycle runs inside one outer `conn.transaction()`, deliberately
+rolled back at the end, so every UPDATE/INSERT genuinely executes and is
+visible to later steps within the same transaction, but nothing is ever
+durably committed to the shared database. Confirmed clean afterward: the
+disposable card/issuer/currency don't exist post-rollback, so normal
+(non-published-row) cleanup proceeds without hitting the immutability
+trigger at all.
+
+Full suite: 373/373 green + 1 skipped (366 prior + 7 new devaluation
+tests, plus one added assertion to an existing publish test confirming
+`superseded_version_id is None` for an ordinary first-time publish).
+
+Part I's ingestion workflow is now feature-complete against its own
+spec: every stage (I.1 CAPTURE through I.6 devaluation, I.8's publish
+gate) has working, tested tooling. What's left (§C.11's battery, the
+currency-review-scope question from #141, and an actual second real
+card to prove the whole pipeline generalizes beyond CASHBACK) is either
+a deeper structural check nothing has needed yet, a product decision, or
+gated on Satya's own source-finding work -- not an unbuilt piece of the
+workflow itself.
