@@ -111,11 +111,17 @@ def _bundle(rate=0.01, effective_from="2026-01-01", source_url=SOURCE_URL_V1, na
 
 
 def _approve_everything(conn, card_version_id) -> None:
+    # Covers the card_version's own rule-level entities AND its currency/
+    # route (docs/DECISIONS.md #148 -- ingest publish's gate now checks both).
     with conn.cursor() as cur:
         cur.execute(
             "update source_links set reviewer_status = 'approved'"
-            " where entity_id = %s or entity_id in (select id from earning_rules where card_version_id = %s)",
-            (card_version_id, card_version_id),
+            " where entity_id = %s"
+            " or entity_id in (select id from earning_rules where card_version_id = %s)"
+            " or entity_id in (select currency_id from card_versions where id = %s)"
+            " or entity_id in (select id from redemption_routes where currency_id ="
+            "   (select currency_id from card_versions where id = %s))",
+            (card_version_id, card_version_id, card_version_id, card_version_id),
         )
 
 

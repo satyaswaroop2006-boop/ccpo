@@ -4350,3 +4350,60 @@ card to prove the whole pipeline generalizes beyond CASHBACK) is either
 a deeper structural check nothing has needed yet, a product decision, or
 gated on Satya's own source-finding work -- not an unbuilt piece of the
 workflow itself.
+
+### 148. #141 resolved -- `ingest publish`'s gate now also covers the
+card's own reward_currency/redemption_route
+
+Presented the question with a specific reading, not a neutral menu:
+`reward_currencies`/`redemption_routes` are issuer-level and can be
+shared across several of an issuer's cards (SS I.2), but `ingest link`'s
+own dedup-by-key means a REUSED currency never gets a second `source_
+links` row -- there is exactly ONE review to do per shared currency,
+ever, not one per card that happens to reuse it. Gating publish on it is
+therefore not repeated review burden; it's making sure that one review
+actually happened before anything whose NACV depends on it goes live (a
+card's NACV is a direct function of its currency's ratio being correct
+-- same class of risk as an unreviewed reward rate). **Satya confirmed:
+gate on it.**
+
+Checked before implementing, not assumed: CASHBACK SBI's own currency
+(`sbi_cashback_inr`) and its route were ALREADY `approved` in the live
+database (Satya's "everything approved" review pass, per #142, covered
+them too) -- so tightening this gate doesn't retroactively suggest
+CASHBACK's already-published version shouldn't have passed; it would
+have cleared the stricter gate exactly the same.
+
+**Implementation** (`ingest/publish.py`): new `_currency_entities_for_
+card_version` resolves the card_version's OWN currency (via `card_
+versions.currency_id`, not "every currency this issuer owns" -- an
+issuer with two cards on different currencies shouldn't have card A's
+publish blocked by card B's unrelated, still-unreviewed one) plus its
+routes; `_check_source_links_gate` now checks this list alongside the
+existing rule-level `entities_for_card_version` list, same "zero rows =
+provenance gap, some unapproved = review gap" logic reused unchanged.
+Kept as two separate resolver functions rather than merging them: 
+`ingest review-queue` groups currencies by ISSUER, not by card (a shared
+currency doesn't belong to one card more than another), so the two
+families need to stay independently resolvable, not pre-flattened into
+one list.
+
+### Verification
+
+`tests/test_ingest_publish.py`: new test approves EVERY rule-level
+entity but deliberately leaves the currency/route unapproved, confirming
+that alone still blocks publish and names both the `reward_currency` and
+`redemption_route` explicitly (not just one of the two). All existing
+tests' `_approve_everything` helpers (in both `test_ingest_publish.py`
+and `test_ingest_devaluation.py`) updated to also approve the card's
+currency/route -- otherwise every one of them would now fail at this
+newly-strict gate, which is itself a form of live confirmation the check
+actually fires; the devaluation cycle test in particular exercises it
+correctly reusing an ALREADY-approved currency across v1 and v2 (no
+double-review needed for the shared row, exactly the reasoning above).
+
+Full suite: 374/374 green + 1 skipped (373 prior + 1 new test, plus
+fixture updates to keep every existing publish-path test passing under
+the stricter gate).
+
+#141 is now fully closed -- Part I's ingestion tooling has no more
+flagged-but-undecided scope questions left open.

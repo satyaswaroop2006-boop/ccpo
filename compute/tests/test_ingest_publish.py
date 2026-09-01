@@ -144,11 +144,17 @@ def _link(conn):
 
 
 def _approve_everything(conn, card_version_id) -> None:
+    # Covers the card_version's own rule-level entities AND its currency/
+    # route (docs/DECISIONS.md #148 -- ingest publish's gate now checks both).
     with conn.cursor() as cur:
         cur.execute(
             "update source_links set reviewer_status = 'approved'"
-            " where entity_id = %s or entity_id in (select id from earning_rules where card_version_id = %s)",
-            (card_version_id, card_version_id),
+            " where entity_id = %s"
+            " or entity_id in (select id from earning_rules where card_version_id = %s)"
+            " or entity_id in (select currency_id from card_versions where id = %s)"
+            " or entity_id in (select id from redemption_routes where currency_id ="
+            "   (select currency_id from card_versions where id = %s))",
+            (card_version_id, card_version_id, card_version_id, card_version_id),
         )
     conn.commit()
 
@@ -191,6 +197,31 @@ def test_publish_refuses_when_source_links_not_all_approved(conn, issuer_id, tmp
     with conn.cursor() as cur:
         cur.execute("select status from card_versions where id = %s", (result.card_version_id,))
         assert cur.fetchone()[0] == "draft"  # refused before touching status
+
+
+def test_publish_refuses_when_only_the_currency_is_unapproved(conn, issuer_id, tmp_path):
+    """docs/DECISIONS.md #148: the gate covers the card's reward_currency/
+    redemption_route too, not just its rule-level entities -- proven here
+    by approving EVERYTHING except the currency/route and confirming that
+    alone still blocks publish."""
+    result = _link(conn)
+    golden_path = _write_golden(tmp_path, _MATCHING_GOLDEN)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "update source_links set reviewer_status = 'approved'"
+            " where entity_id = %s or entity_id in (select id from earning_rules where card_version_id = %s)",
+            (result.card_version_id, result.card_version_id),
+        )
+    conn.commit()
+
+    with pytest.raises(PublishError, match="reward_currency.*not approved") as exc_info:
+        publish_card_version(conn, result.card_version_id, [golden_path])
+    assert "redemption_route" in str(exc_info.value)  # both flagged, not just the currency itself
+
+    with conn.cursor() as cur:
+        cur.execute("select status from card_versions where id = %s", (result.card_version_id,))
+        assert cur.fetchone()[0] == "draft"
 
 
 def test_publish_refuses_when_no_golden_scenario_passes(conn, issuer_id, tmp_path):

@@ -22,18 +22,19 @@ deleted or overwritten").
 SS I.4's gate, restated as three checks this module actually runs:
 
 1. **Every source_link on the card_version and its children is
-   'approved'.** "Children" is read literally off Part D's own table map
-   (SS D.1: `card_versions` directly parents `earning_rules`/`caps`/
-   `thresholds`/`exclusions`/`benefits`/`surcharges`) -- `reward_
-   currencies`/`redemption_routes` are NOT included: they hang off
-   `issuers` as a sibling branch, potentially shared across several of
-   an issuer's cards (SS I.2), so gating THIS card_version's publish on
-   an issuer-level row's review status would be wrong the moment a
-   second card shares it. Flagged here as a deliberate scope boundary,
-   not a silent omission: a card's NACV does depend on its currency's
-   ratio being correct, so whether currency/route review should ALSO
-   gate publish is a real question worth Satya's input if it matters in
-   practice -- not decided unilaterally either way.
+   'approved'** -- PLUS the card's own `reward_currency`/`redemption_
+   route` (docs/DECISIONS.md #148, resolving #141's own deliberately-left-
+   open question). "Children" per Part D's table map (SS D.1:
+   `card_versions` directly parents `earning_rules`/`caps`/`thresholds`/
+   `exclusions`/`benefits`/`surcharges`) doesn't literally cover `reward_
+   currencies`/`redemption_routes` (they hang off `issuers` as a sibling
+   branch, potentially SHARED across several of an issuer's cards, SS
+   I.2) -- but a card's NACV is directly a function of its currency's
+   ratio being correct, the same class of risk as an unreviewed reward
+   rate, and `ingest link`'s own dedup means a reused currency never
+   gets a second `source_links` row: there is exactly ONE review to do
+   per shared currency, ever, not repeated per card that reuses it.
+   Satya confirmed: gate on it.
 2. **Passes engine-compatibility validation.** Re-run directly against
    what's actually IN THE DATABASE right now (not the original bundle
    file, which could have drifted) -- `bundle_from_dict` plus the same
@@ -118,8 +119,14 @@ def _j(x: Any) -> str:
 
 def entities_for_card_version(cur, card_version_id: Any) -> list[tuple[str, Any, str]]:
     """Every entity SS I.4's gate treats as "the card_version and its
-    children": itself plus one row per child rule table. Deliberately
-    excludes reward_currency/redemption_route -- see module docstring."""
+    children": itself plus one row per child rule table. Does NOT include
+    reward_currency/redemption_route -- those are a separate, issuer-level
+    branch (see `_currency_entities_for_card_version`), not literal
+    children of `card_versions` per Part D's own table map. Kept as two
+    functions rather than one merged list: `ingest review-queue` groups
+    currencies by ISSUER, not by card (a shared currency doesn't belong
+    to one card more than another), so it needs the two families
+    resolvable separately, not pre-flattened together."""
     entities: list[tuple[str, Any, str]] = [("card_version", card_version_id, "(card_version)")]
     for entity_type, table in _CARD_CHILD_TABLES.items():
         cur.execute(f"select id, key from {table} where card_version_id = %s", (card_version_id,))
@@ -128,9 +135,29 @@ def entities_for_card_version(cur, card_version_id: Any) -> list[tuple[str, Any,
     return entities
 
 
+def _currency_entities_for_card_version(cur, card_version_id: Any) -> list[tuple[str, Any, str]]:
+    """The card_version's own currency and its routes -- resolved via
+    `card_versions.currency_id`, not "every currency this issuer owns"
+    (an issuer with several cards on different currencies shouldn't have
+    card A's publish blocked by card B's still-unreviewed, unrelated
+    currency). docs/DECISIONS.md #148."""
+    cur.execute(
+        "select rc.id, rc.key from card_versions cv join reward_currencies rc on rc.id = cv.currency_id"
+        " where cv.id = %s",
+        (card_version_id,),
+    )
+    currency_id, currency_key = cur.fetchone()
+    entities: list[tuple[str, Any, str]] = [("reward_currency", currency_id, currency_key)]
+    cur.execute("select id, key from redemption_routes where currency_id = %s", (currency_id,))
+    for route_id, route_key in cur.fetchall():
+        entities.append(("redemption_route", route_id, route_key))
+    return entities
+
+
 def _check_source_links_gate(cur, card_version_id: Any) -> list[str]:
     problems: list[str] = []
-    for entity_type, entity_id, key in entities_for_card_version(cur, card_version_id):
+    all_entities = entities_for_card_version(cur, card_version_id) + _currency_entities_for_card_version(cur, card_version_id)
+    for entity_type, entity_id, key in all_entities:
         cur.execute(
             "select reviewer_status from source_links where entity_type = %s and entity_id = %s",
             (entity_type, entity_id),
