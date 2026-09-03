@@ -1,6 +1,6 @@
-"""Stage 10 -- COSTS (Part A SS A.6, SS A.10, SS A.11, Part C SS C.4 Stage 10).
+"""Stage 10 -- COSTS (Part A SS A.6, SS A.10, SS A.11, SS A.12, Part C SS C.4 Stage 10).
 
-Three independent cost lines, each a direct transcription of its formula:
+Four independent cost lines, each a direct transcription of its formula:
 
   Fees (A.6): waiver achievement comes straight from Stage 6-7's actual
   waive_fee ThresholdEvents (not re-derived here) --
@@ -39,6 +39,23 @@ Three independent cost lines, each a direct transcription of its formula:
       sidesteps the conflict instead of inventing a fourth eligibility
       mask to route around it.
 
+  Redemption fees (A.12): RedemptionFees(c) = Sum over each priced
+  currency's route flat_redemption_fee(route) . (1+g) . redemptions_per_
+  year(currency), only for currencies that actually earned something to
+  redeem (points<=0 -> nothing redeemed -> no fee). `flat_redemption_fee`
+  is a flat, per-REQUEST charge (SBI Card PRIME's real MITC p.31 fact:
+  "Rs.99 ... charged only once as per batch processed in a day
+  irrespective of no. of items redeemed") -- fundamentally NOT the same
+  shape as `RedemptionRoute.per_point_fee` (which scales with points and
+  is already priced inside Stage 8's own per-point value). Annual
+  modelling has no visibility into how many separate redemption requests
+  a cardholder actually makes in a year -- `redemptions_per_year` is
+  therefore a genuine usage-frequency ASSUMPTION (default 1/year per
+  currency), the same registry/scenario status as Need/utilisation/
+  friction elsewhere (docs/DECISIONS.md #22), never a T&C-cited fact.
+  Deferred since #19/#29 (Phase 2) -- no route in the seed catalog ever
+  carried one; closed once SBI Card PRIME needed it for real.
+
 GST_RATE=0.18 is a fixed constant, not a per-card parameter: no card in
 the seed catalog overrides it, and it matches golden_syn_ecom_basic.json's
 own hand computation (joining fee 500 * 1.18 = 590) exactly.
@@ -53,8 +70,10 @@ from engine.caps import VALID_WINDOW_KINDS, Window, window_flags, window_instanc
 from engine.match import Selector, UNSUPPORTED_SELECTOR_FIELDS, selector_matches
 from engine.normalise import SpendSegment
 from engine.thresholds import ThresholdEvent
+from engine.valuation import CurrencyValuation, RewardCurrency
 
 GST_RATE = Decimal("0.18")
+DEFAULT_REDEMPTIONS_PER_YEAR = Decimal("1")
 
 
 @dataclass(frozen=True)
@@ -128,6 +147,41 @@ def forex_cost(international_spend: Decimal, forex_markup: Decimal) -> Decimal:
 
 def international_spend_total(segments: Sequence[SpendSegment]) -> Decimal:
     return sum((s.amount for s in segments if s.geography == "international"), Decimal("0"))
+
+
+def redemption_fees_cost(
+    valuations: Sequence[CurrencyValuation],
+    currencies: dict[str, RewardCurrency],
+    redemptions_per_year: dict[str, Decimal] | None = None,
+) -> Decimal:
+    """A.12's RedemptionFees(c): flat_redemption_fee(route) . (1+g) .
+    redemptions_per_year(currency), summed over every currency this card
+    actually earned something in (points<=0 -> nothing to redeem -> no
+    fee -- a currency nobody earned anything on this year isn't being
+    redeemed FROM). Priced against `valuation.v_exp_route_key` -- the same
+    route Stage 8 actually valued the currency's points through, not some
+    other route on the same currency the card also happens to declare.
+
+    `redemptions_per_year` is a sparse currency_key -> count override; a
+    currency not named there defaults to `DEFAULT_REDEMPTIONS_PER_YEAR`
+    (1/year) -- see module docstring for why this is a usage-frequency
+    ASSUMPTION, never a sourced fact. A route with `flat_redemption_fee=0`
+    (every route that's never declared one, i.e. every existing card)
+    contributes exactly Rs0, so this is a zero-behaviour-change addition
+    for every card that predates it."""
+    redemptions_per_year = redemptions_per_year or {}
+    total = Decimal("0")
+    for valuation in valuations:
+        if valuation.points <= 0:
+            continue
+        route = next(
+            (r for r in currencies[valuation.currency_key].routes if r.key == valuation.v_exp_route_key), None,
+        )
+        if route is None or route.flat_redemption_fee == 0:
+            continue
+        n = redemptions_per_year.get(valuation.currency_key, DEFAULT_REDEMPTIONS_PER_YEAR)
+        total += route.flat_redemption_fee * (1 + GST_RATE) * n
+    return total
 
 
 def validate_surcharge(surcharge: Surcharge) -> None:

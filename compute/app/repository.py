@@ -268,13 +268,13 @@ def _fetch_currency_dicts(conn: psycopg.Connection) -> list[dict]:
         currency_rows = cur.fetchall()
         cur.execute(
             "select currency_id, key, route_type, ratio, friction_default, min_points,"
-            " transfer_partner, transfer_ratio, partner_point_value from redemption_routes"
+            " transfer_partner, transfer_ratio, partner_point_value, flat_redemption_fee from redemption_routes"
             " order by currency_id, key"
         )
         route_rows = cur.fetchall()
 
     routes_by_currency_id: dict = {cid: [] for cid, _key in currency_rows}
-    for currency_id, rkey, route_type, ratio, friction_default, min_points, transfer_partner, transfer_ratio, partner_point_value in route_rows:
+    for currency_id, rkey, route_type, ratio, friction_default, min_points, transfer_partner, transfer_ratio, partner_point_value, flat_redemption_fee in route_rows:
         route: dict = {"key": rkey, "route_type": route_type, "friction_default": friction_default}
         if ratio is not None:
             route["ratio"] = ratio
@@ -286,6 +286,8 @@ def _fetch_currency_dicts(conn: psycopg.Connection) -> list[dict]:
             route["transfer_ratio"] = transfer_ratio
         if partner_point_value is not None:
             route["partner_point_value"] = partner_point_value
+        if flat_redemption_fee:
+            route["flat_redemption_fee"] = flat_redemption_fee
         routes_by_currency_id[currency_id].append(route)
 
     return [{"key": key, "routes": routes_by_currency_id[cid]} for cid, key in currency_rows]

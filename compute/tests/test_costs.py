@@ -9,10 +9,19 @@ from decimal import Decimal
 import pytest
 
 from engine.caps import Window
-from engine.costs import Surcharge, SurchargeWaiver, compute_fees, forex_cost, international_spend_total, surcharge_cost
+from engine.costs import (
+    Surcharge,
+    SurchargeWaiver,
+    compute_fees,
+    forex_cost,
+    international_spend_total,
+    redemption_fees_cost,
+    surcharge_cost,
+)
 from engine.match import Selector
 from engine.normalise import SpendSegment
 from engine.thresholds import Payload, ThresholdEvent
+from engine.valuation import CurrencyValuation, RedemptionRoute, RewardCurrency
 
 ANNIV_MONTHS = tuple(range(1, 13))
 
@@ -199,3 +208,78 @@ def test_waiver_rate_exceeding_surcharge_rate_raises():
     )
     with pytest.raises(ValueError, match="exceeds the surcharge's own rate"):
         surcharge_cost([_fuel_segment(1, "1000")], [bad])
+
+
+# ---------------------------------------------------------------------------
+# Redemption fees (A.12's RedemptionFees(c)) -- closed docs/DECISIONS.md
+# #19/#29's deferral via SBI Card PRIME's real MITC p.31 fact: Rs.99
+# ("charged only once as per batch processed in a day irrespective of no.
+# of items redeemed"), confirmed independently by the official
+# rewards-information FAQ's own Q1.
+# ---------------------------------------------------------------------------
+
+def _currency_with_route(route: RedemptionRoute) -> dict[str, RewardCurrency]:
+    return {"pts": RewardCurrency(key="pts", routes=(route,))}
+
+
+def _valuation(points: str, route_key: str = "primary") -> CurrencyValuation:
+    return CurrencyValuation(
+        currency_key="pts", points=Decimal(points), v_exp_route_key=route_key,
+        v_exp_rupees=Decimal(points) * Decimal("0.25"), v_cons_rupees=None, v_opt_rupees=None,
+    )
+
+
+def test_flat_fee_grossed_up_by_gst_once_per_year_by_default():
+    # SBI Card PRIME's real fact: Rs.99 + GST, once per redemption batch --
+    # default redemptions_per_year=1 -> 99 * 1.18 = Rs.116.82.
+    route = RedemptionRoute(key="primary", route_type="statement_credit", ratio=Decimal("0.25"), flat_redemption_fee=Decimal("99"))
+    currencies = _currency_with_route(route)
+    result = redemption_fees_cost([_valuation("31200")], currencies)
+    assert result == Decimal("116.82")
+
+
+def test_zero_points_earned_means_nothing_was_redeemed_no_fee():
+    route = RedemptionRoute(key="primary", route_type="statement_credit", ratio=Decimal("0.25"), flat_redemption_fee=Decimal("99"))
+    currencies = _currency_with_route(route)
+    result = redemption_fees_cost([_valuation("0")], currencies)
+    assert result == Decimal("0")
+
+
+def test_route_with_no_flat_fee_costs_nothing_zero_behaviour_change():
+    """Every existing card (every route with the field's own default,
+    flat_redemption_fee=0) must see NO change from this function's
+    existence -- confirmed directly, not just inferred from the default."""
+    route = RedemptionRoute(key="primary", route_type="statement_credit", ratio=Decimal("0.25"))
+    currencies = _currency_with_route(route)
+    result = redemption_fees_cost([_valuation("50000")], currencies)
+    assert result == Decimal("0")
+
+
+def test_redemptions_per_year_override_scales_the_fee():
+    route = RedemptionRoute(key="primary", route_type="statement_credit", ratio=Decimal("0.25"), flat_redemption_fee=Decimal("99"))
+    currencies = _currency_with_route(route)
+    result = redemption_fees_cost([_valuation("31200")], currencies, redemptions_per_year={"pts": Decimal("3")})
+    assert result == Decimal("99") * Decimal("1.18") * Decimal("3")
+    assert result == Decimal("350.46")
+
+
+def test_prices_against_the_route_actually_valued_not_a_sibling_route():
+    """voucher_catalog-shaped scenario (SBI Card PRIME's real bundle): the
+    currency has TWO routes, but only the one actually named in v_exp_
+    route_key should be charged -- the other route's own fee (even if
+    nonzero) must never leak in."""
+    priced = RedemptionRoute(key="voucher_catalog", route_type="voucher", ratio=Decimal("0.1827"), flat_redemption_fee=Decimal("0"))
+    unpriced = RedemptionRoute(key="statement_credit", route_type="statement_credit", flat_redemption_fee=Decimal("99"))
+    currencies = {"pts": RewardCurrency(key="pts", routes=(unpriced, priced))}
+    result = redemption_fees_cost([_valuation("31200", route_key="voucher_catalog")], currencies)
+    assert result == Decimal("0")  # priced route's own fee is 0, unpriced route's Rs.99 never applies
+
+
+def test_multiple_currencies_sum_independently():
+    route_a = RedemptionRoute(key="a", route_type="statement_credit", ratio=Decimal("0.25"), flat_redemption_fee=Decimal("99"))
+    route_b = RedemptionRoute(key="b", route_type="statement_credit", ratio=Decimal("1"), flat_redemption_fee=Decimal("49"))
+    currencies = {"pts_a": RewardCurrency(key="pts_a", routes=(route_a,)), "pts_b": RewardCurrency(key="pts_b", routes=(route_b,))}
+    valuation_a = CurrencyValuation(currency_key="pts_a", points=Decimal("1000"), v_exp_route_key="a", v_exp_rupees=Decimal("250"), v_cons_rupees=None, v_opt_rupees=None)
+    valuation_b = CurrencyValuation(currency_key="pts_b", points=Decimal("500"), v_exp_route_key="b", v_exp_rupees=Decimal("500"), v_cons_rupees=None, v_opt_rupees=None)
+    result = redemption_fees_cost([valuation_a, valuation_b], currencies)
+    assert result == (Decimal("99") + Decimal("49")) * Decimal("1.18")

@@ -178,6 +178,7 @@ def _route_from_dict(d: dict) -> RedemptionRoute:
         transfer_partner=d.get("transfer_partner"),
         transfer_ratio=Decimal(str(d["transfer_ratio"])) if "transfer_ratio" in d else None,
         partner_point_value=Decimal(str(d["partner_point_value"])) if "partner_point_value" in d else None,
+        flat_redemption_fee=Decimal(str(d["flat_redemption_fee"])) if "flat_redemption_fee" in d else Decimal("0"),
     )
 
 

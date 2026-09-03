@@ -80,14 +80,14 @@
       "_note": "benefit_need=0 for priority_pass_lounge is a SCENARIO CHOICE (assume this cardholder doesn't use lounge access), matching checklist item 4's intent to keep this golden tied only to fully-modelled facts -- not a claim about the benefit's real entitlement (4/year, see the bundle's own benefit note)."
     },
     "expected": {
-      "gross_points_earned": 31200,
+      "_gross_points_earned": 31200,
       "waiver_achieved": true,
       "fee_paid": 0.00,
-      "fee_year1": 3538.82,
+      "_fee_year1": 3538.82,
       "gross_reward_value": 5700.24,
       "nacv_steady_state": 5700.24,
       "nacv_year_1": 2161.42,
-      "_note": "gross_reward_value/nacv_steady_state/nacv_year_1 are priced via voucher_catalog's assumption-registry ratio (0.1827 Rs/point, mean of 100 sbi-card-prime-eligible catalog items as of 2026-09-05) -- NOT a T&C-cited fact. statement_credit remains unpriced. Everything else in 'expected' is fully sourced and independently checkable against reward_terms Sec 11.3 and the MITC fee table."
+      "_note": "gross_reward_value/nacv_steady_state/nacv_year_1 are priced via voucher_catalog's assumption-registry ratio (0.1827 Rs/point, mean of 100 sbi-card-prime-eligible catalog items as of 2026-09-05) -- NOT a T&C-cited fact. statement_credit remains unpriced. Everything else in 'expected' is fully sourced and independently checkable against reward_terms Sec 11.3 and the MITC fee table. _gross_points_earned/_fee_year1 are leading-underscore -- ingest/publish.py doesn't read either (checked only by this repo's own tests/test_golden_sbi_prime.py) -- since docs/DECISIONS.md #152/#153: an unrecognized non-underscore key here now FAILS the scenario loudly instead of being silently skipped."
     },
     "tolerance_rupees": 0.01
   }

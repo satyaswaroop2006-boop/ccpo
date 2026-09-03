@@ -206,7 +206,7 @@ def test_scenario_a_steady_state_points_and_fee_waiver():
     assert grocery_points == Decimal("24000")   # 2,000/mo x 12
     assert ecommerce_points == Decimal("7200")  # 600/mo x 12
     gross_points_earned = grocery_points + ecommerce_points
-    assert gross_points_earned == Decimal(str(expected["gross_points_earned"]))
+    assert gross_points_earned == Decimal(str(expected["_gross_points_earned"]))
 
     threshold_events = evaluate_thresholds(bundle.thresholds, milestone_segments=eligible.milestone, waiver_segments=eligible.waiver)
     assert len(threshold_events) == 1 and threshold_events[0].payload.type == "waive_fee"
@@ -215,7 +215,7 @@ def test_scenario_a_steady_state_points_and_fee_waiver():
     fees = compute_fees(bundle.joining_fee, bundle.annual_fee, threshold_events)
     assert fees.waived == expected["waiver_achieved"]
     assert fees.steady_fee == Decimal(str(expected["fee_paid"]))
-    assert fees.year1_fee == Decimal(str(expected["fee_year1"]))
+    assert fees.year1_fee == Decimal(str(expected["_fee_year1"]))
 
     # Valuation (Stage 8), via voucher_catalog -- the piece that used to be blocked.
     valuation_currencies = _valuation_currencies(currencies)

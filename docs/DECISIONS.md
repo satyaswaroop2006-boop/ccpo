@@ -4833,3 +4833,108 @@ from the live DB (per #151) -- a genuine, permanent asterisk on this
 publish that a future `ingest link --new-version` can resolve once the
 ratio is ever found, not something this publish itself needed to wait
 on.
+
+### 153. `flat_redemption_fee` (A.12's `RedemptionFees(c)`) closed; `ingest
+publish`'s silent-skip hardened -- both prompted directly by #152's incident
+
+Two independent, explicitly-requested follow-ups from #152: close the
+`flat_redemption_fee` gap the DB schema already had a column for but the
+engine never read, and harden `ingest publish` so an unrecognised
+`expected`/`assumptions` key can never again silently pass a scenario
+that actually checked almost nothing.
+
+**RedemptionFees(c), A.12**: `engine.valuation.RedemptionRoute` gained
+`flat_redemption_fee: Decimal = Decimal("0")` (matching the DB column's
+own default -- zero behaviour change for every existing route,
+confirmed directly via the new test suite, not just inferred). `engine.
+costs.redemption_fees_cost` (Stage 10, per DECISIONS.md #19's own
+prediction "likely lands in Stage 10... grouped with fees/surcharges/
+forex, not the currency pipeline") prices it: `flat_redemption_fee(route)
+. (1+g) . redemptions_per_year(currency)`, summed only over currencies
+that actually earned something to redeem this year (`points<=0` -> no
+fee -- nothing to redeem FROM), priced against the SAME route Stage 8
+actually valued the currency through (`CurrencyValuation.v_exp_route_
+key`), never a sibling route on the same currency. `redemptions_per_
+year` is a NEW, genuine usage-frequency assumption (default 1/year per
+currency, `EvaluateAssumptions.redemptions_per_year`) -- annual category-
+mode modelling has no visibility into how many separate redemption
+requests a cardholder actually makes, so this is registry/scenario
+status (docs/DECISIONS.md #22's precedent: Need/utilisation/friction are
+all caller-supplied, never derived), not a T&C fact SBI's own MITC could
+ever state. `assemble_nacv` (Stage 11) takes the resulting Decimal as a
+plain already-priced cost (same posture as `forex_cost`/`surcharge_
+cost`), subtracted from both `steady_state` and `year_1`, traced as its
+own line.
+
+Wired through EVERY path that builds a route dict from a DB row, not
+just one: `engine.card_bundle._route_from_dict` (JSON bundles),
+`app.repository._fetch_currency_dicts` (the live `/evaluate`/`/optimise`
+API path), and `ingest.publish._fetch_currency_dict` (a THIRD, separately
+maintained copy of the same route-loading SQL/dict-building logic found
+while making this fix -- noted as a real duplication, not refactored
+away here since that's a larger, unrequested change; a concrete lead for
+whoever next touches either copy).
+
+**Applied to PRIME with precision, not blanket-applied "to close the
+gap"**: re-read MITC p.31's exact wording -- "Applicable only on
+Physical products, Statement Credit & on Vouchers that are sent
+physically" -- and noticed "sent physically" specifically excludes
+electronically-delivered vouchers. `voucher_catalog`'s own 100 underlying
+catalog items (docs/DECISIONS.md #150) are ALL "e-Gift Voucher"/
+"e-Voucher" products -- electronically delivered, per their own names --
+so `voucher_catalog.flat_redemption_fee=0`, not 99: this route reads as
+exempt. `statement_credit` (explicitly named in the MITC clause) gained
+`flat_redemption_fee=99`, still unpriced/unused pending item 1's
+resolution (#151). Net effect on the published golden: NONE -- the fee
+doesn't apply to the route this bundle actually prices through, so
+`golden_sbi_prime.json`'s NACV is unchanged. This is the kind of
+distinction that's easy to miss under "just close the gap" pressure --
+worth a moment's pause per Part I SS I.0's own discipline before
+attaching a real-sounding number to the wrong route.
+
+**Publish.py hardening**: `ingest.publish._run_scenario` now computes
+`_unknown_keys` against explicit `_KNOWN_EXPECTED_KEYS`/`_KNOWN_
+ASSUMPTION_KEYS` sets BEFORE calling `evaluate_card` (same "check first,
+evaluate second" ordering #131's engine-compatibility fix already
+established) -- any key present that isn't recognised AND doesn't start
+with `_` (this repo's own `_note`/`_source` documentation-field
+convention, extended here on purpose rather than inventing a new one)
+now fails that scenario with a named diff instead of being silently
+dropped. `golden_sbi_prime.json`'s own informational-only fields
+(`gross_points_earned`, `fee_year1` -- read by this repo's own tests,
+never by `ingest publish` itself) renamed to `_gross_points_earned`/
+`_fee_year1` to make that distinction explicit rather than relying on
+the reader already knowing which fields the tool actually contracts on.
+
+### Verification
+
+`tests/test_costs.py`: 6 new tests for `redemption_fees_cost` --
+GST gross-up + default redemptions_per_year=1, zero-points-means-no-fee,
+zero-flat-fee-means-zero-behaviour-change (existing cards), a custom
+`redemptions_per_year` override, pricing against the ACTUALLY-valued
+route (not a sibling route on the same currency, even when that sibling
+carries a nonzero fee), and multiple currencies summing independently.
+`tests/test_assemble.py`: 1 new test for `assemble_nacv`'s new
+parameter/trace line; 2 pre-existing trace-shape tests updated for the
+new trailing line (caught and fixed a real editing mistake made along
+the way -- a trailing assertion belonging to one test got orphaned into
+a different one during a find-and-replace that didn't view the full
+original function first; restored to the correct test before either was
+trusted). `tests/test_ingest_publish_scenario_validation.py` (4 new,
+DB-independent -- the failure path this covers returns before touching
+the database at all): confirms an unrecognised `expected` key fails
+loudly (using `golden_sbi_prime.json`'s own real first-mistake key names
+as the test's fixture, not an invented example), same for `assumptions`,
+confirms leading-underscore keys are correctly exempt, confirms every
+key this repo's two real goldens actually use is never flagged. Full
+suite: 396/396 green + 1 skipped (385 prior + 11 new).
+
+Live-verified end to end, not just via the JSON-bundle test path: loaded
+SBI Card PRIME through `app.repository.PostgresCardRepository` (the
+exact class `/evaluate`/`/optimise` use) and re-ran `evaluate_card`
+against the live, already-published database row -- `flat_redemption_
+fee=0` on the live `voucher_catalog` route (the schema's own default,
+confirmed directly, not assumed), NACV steady-state = Rs.5,700.24,
+byte-identical to the published golden. No re-link, re-publish, or
+schema migration needed -- the already-published row was already
+correct under the new logic by construction.

@@ -64,7 +64,10 @@ def test_assemble_nacv_trace_includes_canonical_lines_even_when_zero():
         steady_fee=Decimal("0"), year1_fee=Decimal("0"),
     )
     kinds = [line.kind for line in result.trace]
-    assert kinds == ["reward", "benefit", "fee", "forex", "surcharge"]
+    # Two "fee" lines by design: the annual/renewal fee, then (Rs0 here,
+    # since redemption_fees_cost defaults to 0) the redemption fee -- see
+    # test_assemble_nacv_redemption_fees_cost_line_below for the nonzero case.
+    assert kinds == ["reward", "benefit", "fee", "forex", "surcharge", "fee"]
     assert result.trace[0].amount == Decimal("1000")
     assert result.trace[2].amount == Decimal("0")  # fee line present even at Rs0
 
@@ -77,8 +80,25 @@ def test_assemble_nacv_milestone_lines_are_inserted_into_the_trace():
         steady_fee=Decimal("0"), year1_fee=Decimal("0"), milestone_lines=milestone_lines,
     )
     kinds = [line.kind for line in result.trace]
-    assert kinds == ["reward", "milestone", "benefit", "fee", "forex", "surcharge"]
-    assert result.steady_state == Decimal("9000")
+    assert kinds == ["reward", "milestone", "benefit", "fee", "forex", "surcharge", "fee"]
+    assert result.steady_state == Decimal("9000")  # 1000 + 8000 + 0 - 0 - 0 - 0 - 0
+
+
+def test_assemble_nacv_redemption_fees_cost_line_below():
+    """A.12's RedemptionFees(c), closed docs/DECISIONS.md #153: a flat,
+    already-priced Decimal (engine.costs.redemption_fees_cost's own job,
+    not this stage's) subtracted from both steady_state and year_1, and
+    traced as its own line distinct from the annual/renewal fee line."""
+    result = assemble_nacv(
+        gross_reward=Decimal("10000"), milestone_value=Decimal("0"), benefit_value=Decimal("0"),
+        steady_fee=Decimal("590"), year1_fee=Decimal("1180"), redemption_fees_cost=Decimal("116.82"),
+    )
+    assert result.steady_state == Decimal("10000") - Decimal("590") - Decimal("116.82")
+    assert result.year_1 == Decimal("10000") - Decimal("1180") - Decimal("116.82")
+    redemption_line = result.trace[-1]
+    assert redemption_line.kind == "fee"
+    assert redemption_line.label == "redemption fees"
+    assert redemption_line.amount == Decimal("-116.82")
 
 
 # ---------------------------------------------------------------------------

@@ -31,9 +31,18 @@ A currency with exactly one route (cashback_inr, always) needs no primary
 route declaration -- there's no real choice to make. A currency with more
 than one route requires one, and raises if it's missing or unknown.
 
-Flat per-currency redemption fees (A.12's `RedemptionFees(c)`, distinct
-from the per-point fee above) aren't modelled here -- no route in the
-seed catalog carries one; see docs/DECISIONS.md.
+Flat per-redemption-event fees (A.12's `RedemptionFees(c)`, distinct from
+`per_point_fee` above, which scales with points redeemed rather than being
+a flat charge per redemption request) are carried on `RedemptionRoute.
+flat_redemption_fee` -- priced by `engine.costs.redemption_fees_cost`
+(Stage 10), not here, since A.12 groups it with fees/forex/surcharges, not
+with this stage's per-point pipeline. See that function's own docstring
+for the "how many redemptions per year" assumption this needs (docs/
+DECISIONS.md #19/#29's original deferral, closed once SBI Card PRIME
+became the first real card with a sourced flat redemption fee -- MITC
+p.31's Rs.99, which the schema's own `redemption_routes.flat_redemption_
+fee` column had a place for since Part D was first designed, unused
+until now).
 """
 from __future__ import annotations
 
@@ -59,6 +68,7 @@ class RedemptionRoute:
     transfer_partner: str | None = None
     transfer_ratio: Decimal | None = None
     partner_point_value: Decimal | None = None
+    flat_redemption_fee: Decimal = Decimal("0")  # A.12's RedemptionFees(c); priced by engine.costs.redemption_fees_cost
 
 
 @dataclass(frozen=True)

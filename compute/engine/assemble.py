@@ -29,10 +29,12 @@ MVP treats years 2-3 as identical steady-state runs (no spend-growth
 modelling, per C.4.2's own stated simplification), so V_3yr = V_year1 +
 2 . V_steady_state -- no separate year-2/3 evaluation needed.
 
-Deferred, both logged in docs/DECISIONS.md: WelcomeValue (accepted as an
+Deferred, logged in docs/DECISIONS.md: WelcomeValue (accepted as an
 optional zero-default parameter, per A.12's formula, but no card in the
-seed catalog has a welcome payload type to test against) and RedemptionFees
-(flat per-currency fees, already deferred at Stage 8 -- nothing new here).
+seed catalog has a welcome payload type to test against). RedemptionFees
+is no longer deferred -- `redemption_fees_cost` (engine/costs.py) computes
+it; `assemble_nacv` takes the resulting Decimal as a plain already-priced
+cost, same posture as `forex_cost`/`surcharge_cost` below.
 
 C.3's `condition: "on_renewal"` (syn_renewal's grant_points tier) is this
 stage's filter to apply, per docs/DECISIONS.md #14: an on_renewal grant
@@ -138,14 +140,21 @@ def assemble_nacv(
     year1_fee: Decimal,
     forex_cost: Decimal = Decimal("0"),
     surcharge_cost: Decimal = Decimal("0"),
+    redemption_fees_cost: Decimal = Decimal("0"),
     welcome_value: Decimal = Decimal("0"),
     milestone_lines: Sequence[TraceLine] = (),
     milestone_value_year1: Decimal | None = None,
 ) -> NACVResult:
     if milestone_value_year1 is None:
         milestone_value_year1 = milestone_value
-    steady_state = gross_reward + milestone_value + benefit_value - steady_fee - forex_cost - surcharge_cost
-    year_1 = gross_reward + milestone_value_year1 + benefit_value + welcome_value - year1_fee - forex_cost - surcharge_cost
+    steady_state = (
+        gross_reward + milestone_value + benefit_value
+        - steady_fee - forex_cost - surcharge_cost - redemption_fees_cost
+    )
+    year_1 = (
+        gross_reward + milestone_value_year1 + benefit_value + welcome_value
+        - year1_fee - forex_cost - surcharge_cost - redemption_fees_cost
+    )
     three_year = year_1 + Decimal("2") * steady_state
 
     trace = (
@@ -155,6 +164,7 @@ def assemble_nacv(
         TraceLine(kind="fee", amount=-steady_fee, label="annual fee (steady-state)"),
         TraceLine(kind="forex", amount=-forex_cost, label="forex cost"),
         TraceLine(kind="surcharge", amount=-surcharge_cost, label="surcharge cost"),
+        TraceLine(kind="fee", amount=-redemption_fees_cost, label="redemption fees"),
     )
 
     return NACVResult(steady_state=steady_state, year_1=year_1, three_year=three_year, trace=trace)

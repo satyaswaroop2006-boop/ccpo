@@ -92,6 +92,24 @@ _EXPECTED_FIELDS = (
     ("fee_paid", "fee_steady"),
 )
 
+# Every `expected`/`assumptions` key this tool actually reads. A key outside
+# either set (and not leading-underscore, this repo's own convention for
+# documentation-only fields like `_note`/`_source`) used to be silently
+# skipped -- exactly the failure mode that let golden_sbi_prime.json
+# "pass" while its renamed fields (`gross_reward_value_rupees` etc.)
+# checked almost nothing (docs/DECISIONS.md #152). See `_unknown_keys`.
+_KNOWN_EXPECTED_KEYS = frozenset({key for key, _ in _EXPECTED_FIELDS}) | {
+    "waiver_achieved", "nacv_steady_state", "nacv_year_1",
+}
+_KNOWN_ASSUMPTION_KEYS = frozenset({
+    "primary_route", "voucher_utilisation", "voucher_friction",
+    "benefit_need", "benefit_unit_value", "redemptions_per_year",
+})
+
+
+def _unknown_keys(d: dict[str, Any], known: frozenset[str]) -> list[str]:
+    return sorted(k for k in d if k not in known and not k.startswith("_"))
+
 
 class PublishError(Exception):
     """Refuses loudly, naming every failing condition -- SS I.9's own posture."""
@@ -325,11 +343,11 @@ def _fetch_currency_dict(conn: psycopg.Connection, card_version_id: Any) -> dict
         currency_id, currency_key = cur.fetchone()
         cur.execute(
             "select key, route_type, ratio, friction_default, min_points, transfer_partner,"
-            " transfer_ratio, partner_point_value from redemption_routes where currency_id = %s order by key",
+            " transfer_ratio, partner_point_value, flat_redemption_fee from redemption_routes where currency_id = %s order by key",
             (currency_id,),
         )
         routes = []
-        for rkey, route_type, ratio, friction_default, min_points, transfer_partner, transfer_ratio, partner_point_value in cur.fetchall():
+        for rkey, route_type, ratio, friction_default, min_points, transfer_partner, transfer_ratio, partner_point_value, flat_redemption_fee in cur.fetchall():
             route: dict[str, Any] = {"key": rkey, "route_type": route_type, "friction_default": friction_default}
             if ratio is not None:
                 route["ratio"] = ratio
@@ -341,6 +359,8 @@ def _fetch_currency_dict(conn: psycopg.Connection, card_version_id: Any) -> dict
                 route["transfer_ratio"] = transfer_ratio
             if partner_point_value is not None:
                 route["partner_point_value"] = partner_point_value
+            if flat_redemption_fee:
+                route["flat_redemption_fee"] = flat_redemption_fee
             routes.append(route)
     return {"key": currency_key, "routes": routes}
 
@@ -402,6 +422,8 @@ def _assumptions_from_scenario(scenario: dict[str, Any]) -> EvaluateAssumptions:
         kwargs["benefit_need"] = {k: Decimal(str(v)) for k, v in a["benefit_need"].items()}
     if "benefit_unit_value" in a:
         kwargs["benefit_unit_value"] = {k: Decimal(str(v)) for k, v in a["benefit_unit_value"].items()}
+    if "redemptions_per_year" in a:
+        kwargs["redemptions_per_year"] = {k: Decimal(str(v)) for k, v in a["redemptions_per_year"].items()}
     return EvaluateAssumptions(**kwargs)
 
 
@@ -417,11 +439,28 @@ def _scenarios_in_golden(golden: dict[str, Any]) -> list[tuple[str, dict[str, An
 
 
 def _run_scenario(bundle: CardRuleBundle, currencies: dict, golden_path: str, name: str, scenario: dict[str, Any]) -> ScenarioResult:
+    expected = scenario["expected"]
+    tolerance = Decimal(str(scenario.get("tolerance_rupees", "0.01")))
+
+    # Refuse loudly on an unrecognized key BEFORE ever calling evaluate_card
+    # -- same "check first, evaluate second" ordering #131's engine-
+    # compatibility fix already established, and for the same reason: a
+    # silently-skipped key here would make this scenario report PASS while
+    # actually checking (or supplying) far less than its author intended.
+    unknown_keys_by_block = {
+        "assumptions": _unknown_keys(scenario.get("assumptions", {}), _KNOWN_ASSUMPTION_KEYS),
+        "expected": _unknown_keys(expected, _KNOWN_EXPECTED_KEYS),
+    }
+    key_diffs = [
+        f"unrecognized {block} key(s) {keys} -- typo, or a field this tool doesn't read yet; "
+        f"prefix with '_' if intentionally informational (this repo's _note/_source convention)"
+        for block, keys in unknown_keys_by_block.items() if keys
+    ]
+    if key_diffs:
+        return ScenarioResult(golden_path=golden_path, scenario_name=name, passed=False, diffs=tuple(key_diffs))
+
     spend = _spend_input_from_scenario(scenario)
     assumptions = _assumptions_from_scenario(scenario)
-    tolerance = Decimal(str(scenario.get("tolerance_rupees", "0.01")))
-    expected = scenario["expected"]
-
     result = evaluate_card(bundle, currencies, spend, assumptions)
     actual_by_field = {
         "gross_reward_value": result.gross_reward_value, "milestone_value": result.milestone_value,

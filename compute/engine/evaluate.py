@@ -31,7 +31,7 @@ from engine.assemble import NACVResult, assemble_nacv, value_milestone_grants_by
 from engine.benefits import BenefitValuation, value_countable_benefit, value_flat_perk_benefit, value_voucher_benefit
 from engine.card_bundle import CardRuleBundle
 from engine.caps import apply_caps, apply_incremental_bands
-from engine.costs import compute_fees, forex_cost, international_spend_total, surcharge_cost
+from engine.costs import compute_fees, forex_cost, international_spend_total, redemption_fees_cost, surcharge_cost
 from engine.eligibility import apply_eligibility
 from engine.match import match
 from engine.normalise import (
@@ -70,6 +70,7 @@ class EvaluateAssumptions:
     flat_perk_utilisation: Decimal = DEFAULT_UTILISATION
     benefit_need: dict[str, Decimal] = field(default_factory=dict)  # benefit_key -> need
     benefit_unit_value: dict[str, Decimal] = field(default_factory=dict)  # benefit_key -> unit value
+    redemptions_per_year: dict[str, Decimal] = field(default_factory=dict)  # currency_key -> count (A.12); sparse, default 1
 
 
 @dataclass(frozen=True)
@@ -181,12 +182,14 @@ def evaluate_card(
     intl_total = international_spend_total(normalised.segments)
     cost_of_forex = forex_cost(intl_total, bundle.forex_markup)
     fees = compute_fees(bundle.joining_fee, bundle.annual_fee, threshold_events)
+    cost_of_redemption_fees = redemption_fees_cost(reward_valuations, currencies, assumptions.redemptions_per_year)
 
     # Stage 11
     nacv = assemble_nacv(
         gross_reward=gross_reward_value, milestone_value=steady_milestone, benefit_value=benefit_value,
         steady_fee=fees.steady_fee, year1_fee=fees.year1_fee,
         forex_cost=cost_of_forex, surcharge_cost=surcharge_result.total,
+        redemption_fees_cost=cost_of_redemption_fees,
         milestone_value_year1=year1_milestone, milestone_lines=steady_lines,
     )
 
