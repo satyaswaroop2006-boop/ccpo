@@ -4679,3 +4679,157 @@ Still not done: `ingest link`/`publish` remain deliberately un-run (same
 reasoning as #149) -- resolving item 1 partially doesn't change the
 publish-readiness bar; 11 other `_review_checklist` items (now 12,
 including this one's own refresh-policy note) still need Satya's read.
+
+### 151. PRIME linked -- but only after finding `redemption_routes.ratio`
+is `NOT NULL` at the schema layer, unconditionally
+
+Satya confirmed the `_review_checklist` was verified and asked to run
+`ingest link`. First attempt failed immediately:
+
+```
+psycopg.errors.NotNullViolation: null value in column "ratio" of
+relation "redemption_routes" violates not-null constraint
+```
+
+Confirmed no partial writes before investigating further (`cards`/
+`reward_currencies`/`sources` all showed zero PRIME rows -- `cmd_link`'s
+`with conn:` context manager rolled the whole transaction back cleanly
+on the exception, exactly as designed).
+
+**Root cause, checked directly against `0001_init.sql`, not guessed**:
+`redemption_routes.ratio numeric(12,6) not null` -- unconditional, with
+no exception even for `route_type='transfer'`, which `engine.valuation.
+RedemptionRoute` doesn't need a real `ratio` for either (it derives
+value from `transfer_ratio * partner_point_value` instead for that
+type). The ENGINE layer can represent "evidenced but genuinely unpriced"
+(`ratio=None`, exactly `statement_credit`'s state) -- that's what let
+#150 document the gap honestly in Python and in the golden. The DATABASE
+schema has no equivalent state: every route row must carry some number,
+full stop. Not a bug in the bundle or in `link_bundle` -- a genuine
+engine/schema capability mismatch, found only because PRIME is the
+first real card to declare a route it can't price.
+
+Noted in passing, not acted on: the same table already has a
+`flat_redemption_fee numeric(12,2) not null default 0` column that
+`engine.valuation.RedemptionRoute` has NO matching field for at all --
+i.e. Part A SS A.12's `RedemptionFees(c)` (checklist item 11, pre-
+existing deferral #19/#29) already has a place to live in the schema,
+just nothing in the engine reads it yet. A concrete lead for whoever
+picks that gap up next, not resolved here.
+
+**Presented three ways through, not picked silently** (AskUserQuestion):
+link with `voucher_catalog` only (drop the unpriced route from what
+gets written to the DB, keep it fully documented in the bundle JSON
+file), migrate the schema to make `ratio` nullable, or store a flagged
+placeholder ratio. **Satya chose linking with `voucher_catalog` only.**
+
+**Implementation**: no engine or ingest-tool code changed. A temporary,
+NOT-committed copy of `bundle_sbi_prime.json` was built (in the session
+scratchpad, never under `compute/ingestion/`) with `statement_credit`
+filtered out of `currencies[0].routes` before calling `ingest link`
+against that copy -- same "adapt a view for what's safe to act on,
+leave the canonical bundle alone" pattern `tests/test_golden_sbi_prime.
+py`'s own `_valuation_currencies()` helper already established for this
+exact same route in #150, now applied at the LINK boundary instead of
+the test boundary. `bundle_sbi_prime.json` itself is untouched -- it
+still declares BOTH routes, with `statement_credit`'s own `_note`
+carrying the full gap explanation; the live DB currently reflects only
+the priceable state of the card, which is a real difference between
+"what's true about PRIME" and "what's usable to evaluate it with"
+worth remembering, not something to quietly resync away.
+
+**Result, verified directly against the DB (not just the CLI's own
+success message)**:
+  - `cards`: `key='prime_sbi'`, `id=922603a2-...`.
+  - `card_versions`: `status='draft'`, `effective_from=2026-01-01`,
+    `id=3e3df444-...`.
+  - `reward_currencies`/`redemption_routes`: exactly one route,
+    `voucher_catalog`/`voucher`/`ratio=0.182700` -- `statement_credit`
+    correctly absent from the DB (present only in the bundle file).
+  - 2 earning rules, 1 threshold, 2 exclusions, 2 benefits, 1 cap linked
+    (1 source inserted -- reward_terms; 1 reused -- the issuer-level
+    MITC, already present from CASHBACK).
+  - 11 `source_links` inserted, all `reviewer_status='unreviewed'` (2
+    issuer-level: the currency + its one linked route; 9 card-level) --
+    confirmed via `ingest review-queue`, matching the CLI's own count
+    exactly.
+
+**Not done**: `ingest publish` was NOT run. Linking is SS I.4's LINK
+stage, not REVIEW or PUBLISH -- the 11 source_links above still need a
+human reviewer pass (flipping `reviewer_status` via Supabase's Table
+Editor, per SS I.5's "never Claude, never the same automated step"
+rule) before `ingest publish`'s own gate (>=1 passing golden, every
+relevant source_link approved, including the card's own currency/route
+per #148) can be attempted. When statement_credit's own ratio is ever
+found, that's a future `ingest link` re-run against the (unmodified)
+canonical bundle, not a schema workaround to unwind.
+
+### 152. PRIME published -- second real card live, first `ingest publish`
+attempt found a golden-format bug on the way, fixed before proceeding
+
+Satya confirmed the review queue and asked to run `ingest publish`.
+Verified independently first (`ingest review-queue` → "Review queue is
+empty"), not just trusted the request.
+
+**First attempt failed** -- not a schema issue this time, an ingestion-
+tooling gap in `golden_sbi_prime.json` itself: `evaluate_card` raised on
+`priority_pass_lounge` needing `benefit_need`/`benefit_unit_value`
+assumptions. `ingest publish`'s `_run_scenario` calls `evaluate_card` on
+the FULL bundle loaded live from the DB -- it has no mechanism to drop a
+benefit the way `tests/test_golden_sbi_prime.py` had been doing (via
+`dataclasses.replace`, a test-only convenience that never existed on the
+`ingest publish` code path). This was a real gap in the golden file that
+the test suite's own workaround had been silently masking since #150 --
+the test passed while the actual publish path would always have failed.
+
+**Also found while fixing it**: the golden's own `expected` keys
+(`fee_steady`, `gross_reward_value_rupees`, `nacv_steady_state_rupees`)
+never matched what `ingest/publish.py`'s `_EXPECTED_FIELDS`/comparison
+code actually looks for (`fee_paid`, `gross_reward_value`,
+`nacv_steady_state`, `nacv_year_1`) -- CASHBACK's own golden already
+uses the correct names; PRIME's drifted from that convention because
+this file's own test asserted against ITS OWN chosen key names rather
+than the shape `ingest publish` requires. Since `_run_scenario` silently
+`continue`s past any `expected` key it doesn't recognise (no error,
+just skipped), publish would have reported PASS while comparing almost
+nothing -- caught only because the benefit-assumptions crash happened
+first and forced a closer look, not because a mismatched-but-silently-
+skipped comparison raises anything on its own. Worth remembering for the
+next card's golden: `ingest publish`'s own field-name contract isn't
+validated anywhere, so a hand-drafted golden can silently pass a gate
+that never actually checked the numbers it claims to.
+
+**Fix**: `golden_sbi_prime.json` gained a real `assumptions` block
+(`primary_route`, `benefit_need`/`benefit_unit_value` for `priority_
+pass_lounge`, set to 0 -- a SCENARIO CHOICE that this cardholder profile
+doesn't use lounge access, not a claim about the real 4/year
+entitlement) and its `expected` keys renamed to match `publish.py`'s
+actual contract, plus the previously-missing `nacv_year_1` line (Rs.
+2,161.42 -- GrossRewardValue 5,700.24 + MilestoneValue(0) + BenefitValue(0)
+- Year1Fee 3,538.82). `tests/test_golden_sbi_prime.py` updated to
+exercise the SAME assumptions path the golden/publish now actually use
+(reads `benefit_need`/`benefit_unit_value` from the golden's own
+`assumptions` block) instead of the `dataclasses.replace` shortcut that
+had been diverging from the real publish path -- the exact kind of
+"test passes, real path doesn't" gap this whole incident was.
+
+**Second attempt**: `[PASS] ingestion/golden_sbi_prime.json ::
+scenario_A_steady_state_points_and_fee` -- published cleanly. Verified
+directly against the DB, not just the CLI's own success message:
+`card_versions.status='published'`, `published_at` set,
+`effective_to=NULL` (open-ended), and `current_card_versions` resolves
+`prime_sbi` to exactly this version.
+
+### Verification
+
+Full suite re-run after the golden/test fixes: 385/385 green + 1
+skipped, unchanged count (the fix corrected existing tests' own
+assertions, not the tests they exercise).
+
+SBI Card PRIME is now the second published real card, and the first
+points-based one. `statement_credit` remains a real, sourced, but
+unpriced route on the currency -- documented in the bundle file, absent
+from the live DB (per #151) -- a genuine, permanent asterisk on this
+publish that a future `ingest link --new-version` can resolve once the
+ratio is ever found, not something this publish itself needed to wait
+on.

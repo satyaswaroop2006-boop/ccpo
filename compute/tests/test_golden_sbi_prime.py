@@ -49,7 +49,6 @@ one of which is now resolved differently than originally expected:
 None of these are silently worked around -- see the tests below.
 """
 import json
-from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -215,26 +214,37 @@ def test_scenario_a_steady_state_points_and_fee_waiver():
     from engine.costs import compute_fees
     fees = compute_fees(bundle.joining_fee, bundle.annual_fee, threshold_events)
     assert fees.waived == expected["waiver_achieved"]
-    assert fees.steady_fee == Decimal(str(expected["fee_steady"]))
+    assert fees.steady_fee == Decimal(str(expected["fee_paid"]))
     assert fees.year1_fee == Decimal(str(expected["fee_year1"]))
 
     # Valuation (Stage 8), via voucher_catalog -- the piece that used to be blocked.
     valuation_currencies = _valuation_currencies(currencies)
     valuation = value_currency(valuation_currencies["sbi_prime_points"], points=gross_points_earned, primary_route_key="voucher_catalog")
-    assert valuation.v_exp_rupees == Decimal(str(expected["gross_reward_value_rupees"]))
+    assert valuation.v_exp_rupees == Decimal(str(expected["gross_reward_value"]))
 
     # Cross-check: the full evaluate_card() orchestrator must agree exactly
-    # with the stage-by-stage numbers above and with the golden's own hand
-    # computation -- same discipline as CASHBACK's own golden test. Uses the
+    # with the stage-by-stage numbers above, the golden's own hand
+    # computation, AND (crucially) `ingest publish`'s own scenario runner --
+    # same discipline as CASHBACK's own golden test, now mirroring the
+    # golden's real `assumptions` block exactly (rather than an alternate
+    # path that merely produced the same number) after `ingest publish`
+    # itself caught a real mismatch: this file used to drop
+    # priority_pass_lounge from the bundle entirely, but publish.py has no
+    # such mechanism and calls evaluate_card on the FULL DB-loaded bundle --
+    # benefit_need=0/benefit_unit_value=0 (a scenario choice, not a claim
+    # about the real 4/year entitlement) is what actually makes this
+    # publishable, so the test now exercises that same path. Uses the
     # narrowed valuation_currencies (gap #4) since evaluate_card's own Stage
-    # 8 call would otherwise hit the same still-unpriced statement_credit
-    # route. priority_pass_lounge is dropped for this call only -- it needs
-    # benefit_need/benefit_unit_value assumptions this golden deliberately
-    # doesn't supply (checklist item 4: excluded so the golden's numbers
-    # stay tied only to fully-modelled facts, not an invented Need=0).
-    bundle_without_lounge = replace(bundle, benefits={k: v for k, v in bundle.benefits.items() if k != "priority_pass_lounge"})
-    result = evaluate_card(bundle_without_lounge, valuation_currencies, spend, EvaluateAssumptions(primary_routes=_PRIMARY_ROUTES))
-    assert result.gross_reward_value == Decimal(str(expected["gross_reward_value_rupees"]))
+    # 8 call would otherwise hit the same still-unpriced statement_credit route.
+    golden_assumptions = _GOLDEN["scenario_A_steady_state_points_and_fee"]["assumptions"]
+    assumptions = EvaluateAssumptions(
+        primary_routes=golden_assumptions["primary_route"],
+        benefit_need={k: Decimal(str(v)) for k, v in golden_assumptions["benefit_need"].items()},
+        benefit_unit_value={k: Decimal(str(v)) for k, v in golden_assumptions["benefit_unit_value"].items()},
+    )
+    result = evaluate_card(bundle, valuation_currencies, spend, assumptions)
+    assert result.gross_reward_value == Decimal(str(expected["gross_reward_value"]))
     assert result.waiver_achieved == expected["waiver_achieved"]
-    assert result.fee_steady == Decimal(str(expected["fee_steady"]))
-    assert result.nacv.steady_state == Decimal(str(expected["nacv_steady_state_rupees"]))
+    assert result.fee_steady == Decimal(str(expected["fee_paid"]))
+    assert result.nacv.steady_state == Decimal(str(expected["nacv_steady_state"]))
+    assert result.nacv.year_1 == Decimal(str(expected["nacv_year_1"]))
