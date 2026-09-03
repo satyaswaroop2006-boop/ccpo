@@ -1,6 +1,8 @@
-"""`ingest` CLI (Part I SS I.9 plus SS I.1's CAPTURE stage). Five
-subcommands: `capture`, `lint`, `link`, `review-queue`, `publish` --
-one per pipeline stage, run in that order.
+"""`ingest` CLI (Part I SS I.9 plus SS I.1's CAPTURE stage). Five pipeline
+subcommands: `capture`, `lint`, `link`, `review-queue`, `publish` -- one per
+pipeline stage, run in that order -- plus `reward-catalog-ratio`, a DRAFT-time
+helper that is NOT one of the six pipeline stages (see `ingest.reward_catalog_
+ratio`'s own module docstring).
 
 `review-queue` is read-only -- it never flips `reviewer_status`. That
 flip is a human act SS I.5 requires stay outside any automated tool
@@ -17,10 +19,12 @@ Usage:
     DATABASE_URL=postgresql://... python -m ingest link compute/ingestion/bundle_sbi_cashback.json
     DATABASE_URL=postgresql://... python -m ingest review-queue
     DATABASE_URL=postgresql://... python -m ingest publish <card_version_id> --golden compute/ingestion/golden_sbi_cashback.json
+    python -m ingest reward-catalog-ratio --card sbi-card-prime --card sbi-card-elite --out compute/ingestion/reference_reward_point_values.json
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -33,6 +37,7 @@ from ingest.lint import LintReport, lint_bundle
 from ingest.link import LinkError, LinkResult, link_bundle
 from ingest.publish import PublishError, PublishResult, publish_card_version
 from ingest.review import ReviewQueueGroup, build_review_queue
+from ingest.reward_catalog_ratio import CatalogFetchError, refresh_reference
 
 load_dotenv()  # compute/.env's DATABASE_URL, local-dev convenience -- same as app/main.py
 
@@ -241,6 +246,35 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reward_catalog_ratio(args: argparse.Namespace) -> int:
+    try:
+        report = refresh_reference(args.card)
+    except CatalogFetchError as e:
+        print(f"ingest reward-catalog-ratio: REFUSED -- {e}", file=sys.stderr)
+        return 1
+
+    print(f"ingest reward-catalog-ratio: fetched {report['source_url']} ({report['captured_at']})")
+    print(f"{report['total_catalog_items_parsed']} catalog items parsed.")
+    print()
+    for card_key, stats in report["segments"].items():
+        if isinstance(stats, str):
+            print(f"  {card_key}: {stats}")
+        else:
+            print(
+                f"  {card_key}: n={stats['n']}, median={stats['median_per_100_points']}/100pts, "
+                f"mean={stats['mean_per_100_points']}/100pts, range=[{stats['min_per_100_points']}, "
+                f"{stats['max_per_100_points']}]"
+            )
+    print()
+    print("This is a DISTRIBUTION summary, not a citable fact -- needs sign-off before use in any bundle (see report['methodology']).")
+
+    if args.out:
+        Path(args.out).write_text(json.dumps(report, indent=2) + "\n")
+        print(f"Written to {args.out}")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ingest", description="Part I SS I.9 ingestion tooling.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -285,6 +319,15 @@ def build_parser() -> argparse.ArgumentParser:
              "files must pass evaluate_card exactly (SS I.8) -- required.",
     )
     publish_parser.set_defaults(func=cmd_publish)
+
+    ratio_parser = subparsers.add_parser(
+        "reward-catalog-ratio",
+        help="DRAFT-time helper (not a pipeline stage): estimate a points-to-rupee ratio from the live "
+             "sbicard.com rewards catalog for one or more card segments, when no T&C states a fixed one.",
+    )
+    ratio_parser.add_argument("--card", action="append", required=True, help="Card key to report on (repeatable), e.g. sbi-card-prime.")
+    ratio_parser.add_argument("--out", help="Optional path to write the full JSON report to.")
+    ratio_parser.set_defaults(func=cmd_reward_catalog_ratio)
 
     return parser
 

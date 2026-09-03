@@ -1,0 +1,211 @@
+{
+  "bundle_id": "sbi_prime_v1",
+  "key": "prime_sbi",
+  "name": "SBI Card PRIME",
+  "issuer_key": "sbi_card",
+  "network": "visa",
+  "effective_from": "2026-01-01",
+  "status": "draft",
+  "_sources": {
+    "reward_terms": {
+      "source_type": "reward_terms",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/ekit-tncs/prime-and-primepro/PRIMe-TnCekit.pdf",
+      "snapshot_note": "SBI Card PRIME e-kit T&C, 29pp. Section 11 (Reward Point Program), Priority Pass terms, and Welcome Gift terms are the ingested reward source.",
+      "authoritative_for": [
+        "earning_rules",
+        "exclusions",
+        "benefits"
+      ],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/reward_terms-2026-09-03.pdf",
+      "captured_at": "2026-09-03"
+    },
+    "mitc": {
+      "source_type": "mitc",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/most-important-terms-and-conditions/mitc-english.pdf",
+      "issuer_level": true,
+      "authoritative_for": [
+        "annual_fee",
+        "joining_fee",
+        "renewal_waiver_threshold",
+        "forex_markup"
+      ],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/mitc-2026-08-31.pdf",
+      "captured_at": "2026-08-31",
+      "_note": "Issuer-level source already captured for CASHBACK SBI (docs/DECISIONS.md #143-146) -- reused here, not re-fetched. Same URL, same storage object."
+    }
+  },
+  "version": {
+    "joining_fee": 2999,
+    "annual_fee": 2999,
+    "gst_rate": 0.18,
+    "forex_markup": 0.035,
+    "_source": "mitc",
+    "_note": "MITC fee table, 'SBI Card PRIME' row (plain -- NOT 'SBI Card PRIME Advantage' or 'SBI Card MILES PRIME', both separate rows at the same 2,999 figure but different waiver thresholds): Annual Fee Rs.2,999, Renewal Fee Rs.2,999 (waived on annual spends of Rs.3 Lakh or more in the preceding year). MITC has no separate 'Joining Fee' line item -- joining_fee modelled equal to annual_fee, same convention as bundle_sbi_cashback.json's own 999/999. Forex 3.5%: MITC p.30's exception list ('all cards except AURUM, Elite, Prime NRI secured, Tata Neu Infinity SBI Credit Card, SBI Card Miles Elite/Miles Prime/Miles') names 'Prime NRI secured' and 'Miles Prime' specifically, not plain 'SBI Card PRIME' -- falls under the general 3.5%."
+  },
+  "currency": "sbi_prime_points",
+  "currencies": [
+    {
+      "key": "sbi_prime_points",
+      "routes": [
+        {
+          "key": "statement_credit",
+          "route_type": "statement_credit",
+          "_source": "reward_terms",
+          "_note": "BLOCKING GAP, STILL UNRESOLVED -- ratio deliberately OMITTED, not fabricated. reward_terms Sec 11 states points are 'exchanged for a wide variety of rewards' via 'Statement Credit -- Credit adjustable against card outstanding' but defers the actual mechanics to an external 'Shop-and-Smile Rewards Program' (11.4, https://www.sbicard.com/en/tnc.page). That page (fetched and read in full) describes redemption multiples (points redeemable in multiples of 2,000, changing to 4,000 from 1 Apr'26) and a monthly redemption cap (60,000 points/card/month from 1 Apr'26) but NEVER states a rupee-per-point conversion ratio anywhere. Also checked: the PRIME product page (JS-rendered shell, no static content), the generic Key Fact Statement PDF (forex table only), and three official FAQ pages (redemption/rewards-information/earning) -- none states one. The rewards-information FAQ's own POINTS REDEMPTION section explicitly says why: 'SBICPSL reserves the right to decide the Reward points required by the Cardholder to avail the Reward Catalog offerings for each segment of credit cards' -- i.e. there is no single published number, by SBI's own admission. `voucher_catalog` below is the resolvable alternative route; this one stays blocked pending an actual cash/statement-credit redemption confirmation (SBI's own FAQ: redemption against cash requires calling support or writing in, not a fixed self-serve rate) -- see _review_checklist item 1."
+        },
+        {
+          "key": "voucher_catalog",
+          "route_type": "voucher",
+          "ratio": 0.1827,
+          "_source": "reward_terms",
+          "_note": "ASSUMPTION-REGISTRY DEFAULT, NOT a T&C-cited fact -- derived empirically via `python -m ingest reward-catalog-ratio --card sbi-card-prime` (compute/ingest/reward_catalog_ratio.py) against sbicard.com's live Rewards Catalogue (window.rewards JSON blob) on 2026-09-03. 100 catalog items are both (a) explicitly eligible for 'sbi-card-prime' in their own 'card' field and (b) gift-card/voucher products stating a fixed INR face value in their name: median=17.48/100pts, mean=18.27/100pts, range=[3.03, 50.00]/100pts. ratio=0.1827 (Rs/point) is that mean. Per-item pricing genuinely varies within this one card's own catalog slice (confirmed via SBI's own stated discretion, see the statement_credit route's note) -- this is a representative typical value, not a fact recoverable from any single source. Satya approved proceeding with the mean of the verified PRIME-eligible distribution over the two initially-proposed anchor figures (Titan Rs.10,000=40,000pts and MakeMyTrip Rs.5,000=20,500pts, ratio~25/100 and ~24.4/100 respectively) once BOTH were traced back to their own 'card' eligibility fields and found to be scoped to OTHER segments (titan-sbi-card and the sbi-platinum-card/sbi-card-elite/sbi-signature-card tier respectively), not sbi-card-prime -- see docs/DECISIONS.md. MUST BE RE-RUN whenever PRIME's own catalog/T&Cs change, not reused indefinitely -- see reward_catalog_ratio.py's own refresh_policy."
+        }
+      ],
+      "_source": "reward_terms",
+      "_note": "Points-based currency (distinct from CASHBACK's direct-rupee cashback) -- Sec 11.3(a): 'SBI Card PRIME Cardholders shall earn 2 Reward Points for every Rs.100 charged.' No transfer-partner or travel-portal route found in either source for this card variant. `voucher_catalog` is now the PRIMARY route this bundle prices rewards at (declared via EvaluateAssumptions.primary_routes in the golden/test, since the currency now has 2 routes and auto-resolution requires exactly one) -- `statement_credit` stays evidenced-but-unpriced."
+    }
+  ],
+  "earning_rules": [
+    {
+      "key": "base_2pt",
+      "selector": {},
+      "accrual": {
+        "type": "per_unit",
+        "unit_amount": 100,
+        "points_per_unit": 2,
+        "rounding": "floor_per_txn",
+        "currency": "sbi_prime_points"
+      },
+      "priority": 10,
+      "_source": "reward_terms",
+      "_note": "Sec 11.3(a): 2 Reward Points per Rs.100 on all otherwise-eligible spend (base rate; accelerated categories below override it via priority)."
+    },
+    {
+      "key": "accelerated_10pt",
+      "selector": {
+        "categories": [
+          "dining",
+          "departmental_stores",
+          "grocery",
+          "movies"
+        ]
+      },
+      "accrual": {
+        "type": "per_unit",
+        "unit_amount": 100,
+        "points_per_unit": 10,
+        "rounding": "floor_per_txn",
+        "currency": "sbi_prime_points"
+      },
+      "caps": [
+        "cap_accelerated_monthly"
+      ],
+      "priority": 100,
+      "_source": "reward_terms",
+      "_note": "Sec 11.3: 'Cardholder shall earn total of 10 Reward Points for every Rs.100 spent on the following categories: 1. Dining 2. Departmental stores 3. Grocery 4. Movies.' MCCs per Sec 11.1(b)-table: Dept Stores 5311, Grocery 5411, Dining (Eating Places 5812, Drinking Places 5813, Fast Food 5814), Movies (Motion Picture Theaters 7832). 'departmental_stores' and 'movies' are NOT yet in engine.normalise.DEFAULT_TICKET_SIZES -- see _review_checklist item; the proposed golden avoids spending in them so this doesn't block evaluation."
+    }
+  ],
+  "caps": [
+    {
+      "key": "cap_accelerated_monthly",
+      "measure": "reward",
+      "amount": 7500,
+      "window_def": {
+        "kind": "calendar_month"
+      },
+      "scope": "rule",
+      "overflow": "base_rate",
+      "_source": "reward_terms",
+      "_note": "Sec 11.3(c): 'will be subject to a capping of 7500 Reward Points per calendar month. After reaching this monthly cap, the cardholder will accrue 2 Reward Point per Rs.100' -- i.e. overflow reverts to the base rate, not zero. ENGINE GAP: this cap pools FOUR distinct categories (dining/departmental_stores/grocery/movies) into ONE combined monthly limit; engine.caps.apply_caps raises ValueError if more than one of those categories has spend in the SAME calendar month while the cap needs trimming (docs/DECISIONS.md #11/#32's pre-existing 'multi-category pooled caps aren't supported yet' deferral -- PRIME is the first real card to actually hit it). See _review_checklist."
+    }
+  ],
+  "exclusions": [
+    {
+      "key": "fuel_reward_exclusion",
+      "selector": {
+        "categories": [
+          "fuel"
+        ]
+      },
+      "excluded_from": [
+        "rewards"
+      ],
+      "_source": "reward_terms",
+      "_note": "Sec 11.1(b)/11.3: 'any purchases at petrol pumps/service stations (MCCs excluded-5172, 5541, 5542, 5983)' do not earn Reward Points."
+    },
+    {
+      "key": "ewallet_reward_exclusion",
+      "selector": {
+        "categories": [
+          "wallet"
+        ]
+      },
+      "excluded_from": [
+        "rewards"
+      ],
+      "_source": "reward_terms",
+      "_note": "Sec 11.3(d): 'e-Wallet Loading Transactions identified under MCCs 6540 and 6541 will not be eligible to accrue reward points with effect from 1st July 2020.'"
+    }
+  ],
+  "thresholds": [
+    {
+      "key": "fee_waiver",
+      "basis": {
+        "measure": "waiver_eligible_spend",
+        "window": {
+          "kind": "anniversary_year"
+        }
+      },
+      "tier_mode": "cumulative",
+      "tiers": [
+        {
+          "tier_index": 1,
+          "threshold_amount": 300000,
+          "payload": {
+            "type": "waive_fee",
+            "fee": "annual"
+          }
+        }
+      ],
+      "_source": "mitc",
+      "_note": "MITC fee table, 'SBI Card PRIME' row: renewal fee waived on annual spends of Rs.3 Lakh or more in the preceding year. PRIME's own reward_terms separately describes a 'Spends Based Reversal': 'eligible for reversal of the annual card fee upon achieving the required Net Retail Spends (retail spends minus reversals) ... during the 365 days immediately preceding the annual fee billing date' -- the specific threshold amount isn't restated there (points at the MITC figure used here), and 'Net Retail Spends' exclusions (does fuel/cash-advance count?) aren't defined in either source. Modelled as all spend counting (CASHBACK SBI precedent, approved 2026-08-15), UNCONFIRMED for PRIME -- see _review_checklist."
+    }
+  ],
+  "surcharges": [],
+  "benefits": [
+    {
+      "key": "priority_pass_lounge",
+      "kind": "countable",
+      "unit_label": "international lounge visit",
+      "entitlement": 4,
+      "entitlement_window": {
+        "kind": "anniversary_year"
+      },
+      "_source": "reward_terms",
+      "_note": "Priority Pass terms, item 5-6 + rate table: 'International Priority Pass Lounges (Outside India): 4 visits* for SBI Card PRIME Cardholder per year' with '*Visits are subject to a maximum of 2 per quarter'. ENGINE GAP (approximation, not blocking): Benefit has only one flat entitlement/window pair -- the 2-per-quarter sub-cap has no representation, so this is modelled as flat 4/year, which can OVERSTATE value if usage clusters in one quarter. Domestic Priority Pass lounges are listed as 'Complimentary' with '-' visits (no complimentary domestic count stated) -- not modelled. Standard membership fee is complimentary (not separately costed); per-visit overage (USD 27+ taxes beyond the 4) not modelled."
+    },
+    {
+      "key": "welcome_gift_voucher",
+      "kind": "voucher",
+      "face_value": 3000,
+      "_source": "reward_terms",
+      "_note": "Welcome Gift T&C item 3: 'All eligible SBI Card Prime cardholders can choose vouchers in multiples of Rs. 1000, up to a total value of Rs. 3000 from a range of brand options', gated on item 2: 'a Cardholder may become eligible for a welcome gift after paying the membership fee for the eligible year.' ENGINE GAP: gated on FEE PAYMENT, not spend -- engine.thresholds.ThresholdBasis only supports measure='milestone_eligible_spend'/'waiver_eligible_spend', so no Threshold can grant this. Not granted by any threshold in this bundle; engine.benefits.value_voucher_benefit will correctly report 0/'not_granted' until this is resolved, NOT a silent zero -- see _review_checklist. Also unresolved: whether 'the eligible year' means joining-year-only or recurring annually."
+    }
+  ],
+  "_review_checklist": [
+    "1. [PARTIALLY RESOLVED 2026-09-05] No source states a fixed rupee-per-point value for the statement_credit route -- confirmed genuinely absent (SBI's own FAQ: 'reserves the right to decide the Reward points required... for each segment of credit cards' -- there is no single number to find). statement_credit stays unpriced. Resolved for VALUATION PURPOSES via a new voucher_catalog route instead: Satya spotted real catalog listings (Titan Rs.10,000=40,000pts, MakeMyTrip Rs.5,000=20,500pts, both ~24-25/100pts) and asked whether ~20-25/100 was a fair simplification; tracing those two items' own 'card' eligibility fields found they're scoped to titan-sbi-card and the sbi-platinum-card/elite/signature tier respectively, NOT sbi-card-prime -- so a new tool (compute/ingest/reward_catalog_ratio.py) was built to compute the ratio from ONLY the 100 catalog items actually eligible for sbi-card-prime (mean=18.27/100pts, materially below the initial 20-25 estimate). See voucher_catalog route's own _note and docs/DECISIONS.md for the full trace. gross_reward_value is now computable via voucher_catalog as the primary route.",
+    "2. [Engine gap] cap_accelerated_monthly (Rs.7,500 RP/month, pooled across 4 categories) triggers engine.caps.apply_caps's 'multi-category pooled caps aren't supported yet' guard (docs/DECISIONS.md #11/#32) whenever more than one of {dining, departmental_stores, grocery, movies} has spend in the same calendar month and the pool needs trimming. The proposed golden avoids this (grocery-only among the 4); a realistic multi-category spender would crash evaluate_card today. Demonstrated directly in tests/test_golden_sbi_prime.py.",
+    "3. [Engine gap] welcome_gift_voucher (Rs.3,000, real and sourced) cannot be granted by any Threshold -- no basis.measure exists for a fee-payment-triggered grant. Excluded from the proposed golden's NACV; a real first-year cardholder's true value is understated by up to Rs.3,000 until this is resolved.",
+    "4. [Engine gap / approximation] priority_pass_lounge's real cap is '4/year AND max 2/quarter'; Benefit only supports one flat entitlement/window pair. Modelled as flat 4/year (can overstate in an edge-case usage pattern). Excluded from the proposed golden entirely (benefit_value=0 in that scenario) so the golden's numbers stay tied only to fully-modelled facts.",
+    "5. [Unmodeled -- no selector dimension exists] Birthday accelerator: 20 RP/Rs.100 for 3 days around the cardholder's own birthday, capped 2,000 RP/year, mutually exclusive with the category accelerator during that window. No selector field for a per-user variable date-of-birth window exists anywhere in Part C's vocabulary or SpendInput. Not in earning_rules[] at all (would fail lint's engine_compatibility check if forced in, correctly).",
+    "6. [Unmodeled -- same reason as 5] Utility-bill Standing-Instruction accelerator: 20 RP/Rs.100 on utility payments registered as SI on an SBI platform, capped 3,000 RP/month. No selector dimension for 'payment method is a registered Standing Instruction' exists.",
+    "7. [Open question -- needs Satya's read, same posture as CASHBACK's rent-inclusion approval] Does 'Net Retail Spends' for the Rs.3,00,000 fee-waiver threshold exclude fuel/cash-advance/EMI the way the REWARD side explicitly excludes fuel/e-wallet? Modelled as 'all spend counts' pending confirmation.",
+    "8. [Unmodeled, low materiality, no vocabulary fits a merchant '% off' deal] 25% off 2nd night at ITC Hotels; 20% off ITC Hotels app food orders; complimentary Club ITC Silver Tier membership; Rs.1,00,000 fraud-liability insurance cover. All confirmed applicable to plain SBI Card PRIME (not just Prime Pro). The Pizza Hut/Yatra.com/Pantaloons Milestone E-Gift Vouchers found in the same PDF are explicitly Prime-PRO-only ('Prime Pro cardholders will receive...') and correctly excluded as out of scope for this card.",
+    "9. [Confirmed absent, not an oversight] PRIME's own reward_terms has NO fuel-surcharge-waiver clause anywhere (checked directly, unlike CASHBACK which has one in its own Sec 13.1). MITC states such waivers are card-specific ('may vary. Refer product T&Cs for details') -- surcharges[] is intentionally empty for PRIME.",
+    "10. Forex 3.5% and joining_fee=annual_fee conventions -- see version._note for the exact citations and reasoning.",
+    "11. [Real, sourced, NOT modelled -- pre-existing engine deferral, docs/DECISIONS.md #19/#29] MITC p.31's Rs.99 Rewards Redemption Fee ('Applicable only on Physical products, Statement Credit & on Vouchers that are sent physically ... for all cards except AURUM') appears to GENUINELY APPLY to PRIME's real redemption mechanism, confirmed independently by the official rewards-information FAQ's own Q1 ('A rewards redemption fee of Rs.99 plus applicable taxes is debited... towards delivery and processing charges in case of physical product redemption and statement credit'), unlike CASHBACK where it was confirmed inapplicable. engine.valuation has no flat per-currency RedemptionFees(c) construct (A.12) at all -- STILL NOT MODELLED even now that item 1's voucher_catalog ratio is resolved. Would reduce the proposed golden's gross_reward_value by Rs.99+GST per redemption batch once built; not reflected in this bundle's NACV.",
+    "12. [Assumption, needs periodic revisiting -- see reward_catalog_ratio.py's refresh_policy] voucher_catalog's ratio=0.1827 is a SNAPSHOT of sbicard.com's live catalog on 2026-09-05, not a fixed card feature -- SBI can revise catalog pricing independently of any T&C change. Must be re-run (python -m ingest reward-catalog-ratio --card sbi-card-prime) before this bundle is next relied upon for a publish decision, and whenever PRIME's own reward T&C changes. compute/ingestion/reference_reward_point_values.json holds the same-day snapshot for several OTHER SBI card segments (Elite/Signature/Platinum, SimplySave, Gold & More, Unnati, Titan co-brand, BPCL, Air India Signature) for reuse when those cards are ingested next -- also subject to the same refresh policy, not a one-time computation."
+  ]
+}

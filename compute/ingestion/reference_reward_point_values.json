@@ -1,0 +1,79 @@
+{
+  "captured_at": "2026-09-03",
+  "source_url": "https://www.sbicard.com/en/personal/rewards.page",
+  "total_catalog_items_parsed": 442,
+  "methodology": "For each card_key, filters catalog items whose 'card' eligibility field includes it AND whose itemName states an explicit INR/Rs face value (gift cards/vouchers only, not physical products without a stated value). Computes (face_value / points) * 100 per item, then median/mean/min/max across that card's own slice. This is a DISTRIBUTION summary, not one fixed fact -- per-item pricing genuinely varies within one card's own catalog (SBI's own stated discretion). An assumption-registry default requiring sign-off before use, not a citable T&C fact.",
+  "refresh_policy": "MUST be re-run (not reused from a prior snapshot) whenever: (a) the card's own reward T&C changes, (b) a new card is being ingested and needs its own segment's numbers, or (c) enough time has passed that catalog pricing may have drifted. There is no automatic staleness detection -- re-running this tool IS the refresh.",
+  "segments": {
+    "sbi-card-prime": {
+      "n": 100,
+      "median_per_100_points": 17.4827,
+      "mean_per_100_points": 18.2721,
+      "min_per_100_points": 3.0303,
+      "max_per_100_points": 50.0
+    },
+    "sbi-card-elite": {
+      "n": 108,
+      "median_per_100_points": 17.8571,
+      "mean_per_100_points": 18.8248,
+      "min_per_100_points": 3.0303,
+      "max_per_100_points": 50.0
+    },
+    "sbi-platinum-card": {
+      "n": 99,
+      "median_per_100_points": 17.4216,
+      "mean_per_100_points": 18.2757,
+      "min_per_100_points": 3.0303,
+      "max_per_100_points": 50.0
+    },
+    "sbi-signature-card": {
+      "n": 108,
+      "median_per_100_points": 17.8571,
+      "mean_per_100_points": 18.8248,
+      "min_per_100_points": 3.0303,
+      "max_per_100_points": 50.0
+    },
+    "simplysave-card": {
+      "n": 100,
+      "median_per_100_points": 17.4827,
+      "mean_per_100_points": 18.2721,
+      "min_per_100_points": 3.0303,
+      "max_per_100_points": 50.0
+    },
+    "sbi-gold-and-more-card": {
+      "n": 99,
+      "median_per_100_points": 17.4216,
+      "mean_per_100_points": 18.2073,
+      "min_per_100_points": 3.0303,
+      "max_per_100_points": 50.0
+    },
+    "sbi-card-unnati": {
+      "n": 98,
+      "median_per_100_points": 17.6215,
+      "mean_per_100_points": 18.392,
+      "min_per_100_points": 3.0303,
+      "max_per_100_points": 50.0
+    },
+    "titan-sbi-card": {
+      "n": 8,
+      "median_per_100_points": 25.0,
+      "mean_per_100_points": 25.0,
+      "min_per_100_points": 25.0,
+      "max_per_100_points": 25.0
+    },
+    "bpcl-sbi-card": {
+      "n": 42,
+      "median_per_100_points": 17.1241,
+      "mean_per_100_points": 17.5121,
+      "min_per_100_points": 3.0303,
+      "max_per_100_points": 50.0
+    },
+    "air-india-sbi-signature-card": {
+      "n": 101,
+      "median_per_100_points": 17.8571,
+      "mean_per_100_points": 18.8255,
+      "min_per_100_points": 3.0303,
+      "max_per_100_points": 50.0
+    }
+  }
+}

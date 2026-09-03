@@ -4407,3 +4407,275 @@ the stricter gate).
 
 #141 is now fully closed -- Part I's ingestion tooling has no more
 flagged-but-undecided scope questions left open.
+
+## Phase 5 -- second real card: SBI Card PRIME (Part I, pipeline generalisation)
+
+### 149. PRIME drafted through CAPTURE/DRAFT/LINT; NOT linked or published --
+three genuine engine gaps found, one of them blocking
+
+Deliberate pipeline-generalisation test, per Satya's own framing: CASHBACK
+SBI (Phase 5's first real card) is a direct-rupee cashback card and never
+exercised reward-currency route valuation, milestones, or vouchers at all.
+SBI Card PRIME is SBI's mainstream points card -- picked specifically to
+force those paths. Worked CAPTURE -> DRAFT -> LINT only, stopping short of
+LINK/PUBLISH per the task's own instruction, because one of the three gaps
+found is genuinely blocking (see #1 below), not merely worth flagging.
+
+**CAPTURE** (`ingest capture`): reward_terms fetched cleanly (29pp, no
+self-declared total page count, no mismatch). The issuer-level MITC was
+reused as-is from CASHBACK's own capture (#143-146) -- same URL, same
+`storage_path`, not re-fetched, per the task's explicit instruction. The
+live MITC URL itself was transiently unreachable when independently
+re-fetched for fee-table cross-referencing (`RemoteProtocolError`, 5
+retries) -- worked around by pulling the ALREADY-CAPTURED snapshot back
+from Supabase Storage via the service-role key instead of trusting a
+fresh live fetch, which is exactly what "capture" is for: a stored
+snapshot outlives a flaky origin server.
+
+**Three genuine engine gaps found**, full citations in the bundle's own
+`_review_checklist` and `tests/test_golden_sbi_prime.py`'s module
+docstring:
+
+1. **[BLOCKING] No source states a rupee-per-point value for
+   `sbi_prime_points`'s `statement_credit` route.** Checked, in this
+   order: reward_terms Sec 11 (defers to an external "Shop-and-Smile
+   Rewards Program" page, `sbicard.com/en/tnc.page`); that page itself
+   (fetched and read in full -- states redemption MULTIPLES, 2,000
+   points changing to 4,000 from 1 Apr'26, and a monthly redemption CAP,
+   60,000 points/card/month from 1 Apr'26, but never a conversion ratio);
+   the PRIME product page (`sbicard.com/en/personal/credit-cards/
+   rewards/sbi-card-prime.page` -- a JS-rendered SPA shell, no static
+   content reachable via a plain fetch); the generic Key Fact Statement
+   PDF (forex table only). A commonly-cited industry figure (SBI reward
+   points are often quoted around Rs.0.25 each) was deliberately NOT
+   used -- that would be filling the field from memory, which Part I SS
+   I.0 forbids outright, not merely discourages. `RedemptionRoute.ratio`
+   is left genuinely unset in the bundle (the JSON key is OMITTED
+   entirely, not set to `null` -- `card_bundle._route_from_dict` would
+   crash on a literal `null` via `Decimal(str(None))`, which is itself a
+   useful confirmation that "unset" and "null" are NOT interchangeable
+   in this loader). `engine.valuation.value_currency` correctly raises
+   ("non-transfer routes require ratio") rather than defaulting to
+   anything -- verified directly (`test_currency_route_ratio_is_
+   genuinely_unset_not_fabricated`). This is the one gap that actually
+   blocks: `gross_reward_value`/NACV cannot be computed AT ALL until
+   Satya (or a further source) supplies this ratio.
+
+2. **The Rs.7,500/calendar-month accelerated-category cap pools FOUR
+   distinct categories** (dining, departmental stores, grocery, movies)
+   into one combined limit (reward_terms 11.3(c)). `engine.caps.
+   apply_caps` already has a guard for exactly this shape and refuses:
+   "a cap window that pools more than one distinct category/channel
+   combination raises rather than guessing how to attribute the
+   overflow across them" -- Phase 2's own pre-existing #11/#32
+   deferral, never hit by any synthetic card, now hit for real for the
+   first time. `overflow: "base_rate"` (10RP/100 reverting to 2RP/100
+   past the cap) maps cleanly onto the engine's existing mechanic --
+   this gap is ONLY about the pooling being multi-category, nothing
+   else about the cap shape is new. Demonstrated directly, not just
+   asserted: `test_multi_category_pooled_cap_gap_is_real` feeds grocery
+   + dining spend in the same months, high enough to need trimming, and
+   confirms `apply_caps` raises. The proposed golden avoids this by
+   spending in only ONE of the four accelerated categories (grocery),
+   which stays fully computable -- a realistic multi-category spender on
+   this card would not evaluate today.
+
+3. **`welcome_gift_voucher` (Rs.3,000, real, sourced) is gated on annual
+   fee PAYMENT, not spend** (Welcome Gift T&C item 2: "eligible for a
+   welcome gift after paying the membership fee for the eligible
+   year"). `engine.thresholds.ThresholdBasis.measure` only supports
+   `milestone_eligible_spend`/`waiver_eligible_spend` -- there is no
+   payload-triggering measure for "fee was charged" at all, so no
+   `Threshold` in the bundle can grant it. Not worked around with a
+   threshold_amount=0 spend-basis hack (would have been a silent
+   misrepresentation of WHY the benefit fires). `value_voucher_benefit`
+   correctly reports `value_rupees=0`/`flags=("not_granted",)` --
+   verified this is a clean, honest zero, not a crash or a fabricated
+   grant (`test_welcome_gift_voucher_is_not_granted_by_any_threshold`).
+
+**One further approximation, flagged but not blocking**: `priority_pass_
+lounge`'s real entitlement is "4/year AND max 2/quarter" -- `Benefit`
+only has one flat entitlement/window pair, no two-tier cap construct.
+Modelled as flat 4/year (can overstate value if a user's usage clusters
+in one quarter) and, to keep the proposed golden tied only to
+fully-modelled facts, excluded from its NACV entirely (`benefit_value=0`
+in that scenario, not a claim the card lacks lounge access).
+
+**Confirmed absent, not unmodeled**: unlike CASHBACK (which has a real
+1% fuel-surcharge waiver in its OWN reward_terms Sec 13.1), PRIME's
+reward_terms contains no fuel-surcharge-waiver clause anywhere -- checked
+directly, not assumed from CASHBACK's precedent. The MITC itself says
+such waivers vary by product and defers to "product T&Cs" -- `surcharges:
+[]` is therefore a confirmed fact about this card, not a gap.
+
+**Two items outside this task's scope, real but not sourced further**:
+the Rs.99 MITC Rewards Redemption Fee (p.31), which was confirmed
+INAPPLICABLE to CASHBACK's automatic cashback mechanism, appears to
+GENUINELY APPLY to PRIME's real redemption paths (statement credit,
+physically-sent vouchers) -- `engine.valuation` has no flat
+per-currency `RedemptionFees(c)` construct at all (Part A SS A.12,
+pre-existing #19/#29 deferral) -- PRIME is the first real card that
+actually needs it, once gap #1 above is resolved. The Birthday (20RP/
+Rs.100, 3-day window around the cardholder's own date of birth) and
+Utility-SI (20RP/Rs.100 on Standing-Instruction-registered utility
+payments) accelerators are UNMODELED, not approximated -- neither has
+any representable selector dimension in Part C's vocabulary (a
+per-user variable date, and a payment-registration-method flag,
+respectively); correctly left out of `earning_rules[]` entirely rather
+than forced through and left to fail lint.
+
+**Verification**: `tests/test_golden_sbi_prime.py`, 5 tests, all
+independently confirming the bundle loads correctly, the currency gap is
+real (raises, not fabricates), the multi-category cap gap is real
+(raises on a genuine two-category-same-month scenario), the welcome-gift
+gap is real (0/not_granted, not a crash), and the proposed golden's own
+`_hand_computation` (31,200 gross points/year, waiver achieved, steady
+fee Rs.0.00, year-1 fee Rs.3,538.82) matches the engine's stage-by-stage
+output exactly for everything that IS computable. `gross_reward_value`/
+`nacv_steady_state` are `null` in the golden's `expected` block --
+explicitly BLOCKED, not zero. `ingest lint` passes cleanly (structural
+checks don't reach either engine gap -- both only surface at evaluation
+time, which lint never runs). Full suite: 379/379 green + 1 skipped (374
+prior + 5 new).
+
+**Not done, deliberately**: `ingest link`/`ingest publish` were NOT run.
+Per the task's own instruction, the card stays `draft`-only until (a)
+Satya independently confirms the golden's expected values, (b) the
+`_review_checklist`'s 11 items are resolved against source (the
+currency-ratio gap above all), and (c) `_sources`' `reviewer_status`
+fields are flipped from `unreviewed`. This is a stricter bar than
+CASHBACK cleared before its own first `ingest link` -- deliberately, per
+the task's explicit "do not treat 'the engine produced X' as a passing
+test" instruction.
+
+### 150. PRIME's point-value gap resolved via a new `ingest reward-catalog-
+ratio` tool -- empirically-derived, not T&C-cited, and two red herrings
+caught before they went into the bundle
+
+Satya spotted real listings on `sbicard.com/en/personal/rewards.page`
+(Titan Rs.10,000 = 40,000 points; MakeMyTrip Rs.5,000 = 20,500 points,
+both ~24-25 rupees/100 points) and asked whether ~20-25/100 was a fair
+simplification "in the absence of any other credible data." Both figures
+checked out EXACTLY against the live catalog -- but tracing each item's
+own `card` eligibility field (a comma-joined list embedded in the same
+JSON row) found the Titan one scoped to `titan-sbi-card` only and the
+MakeMyTrip one scoped to the `sbi-platinum-card`/`sbi-card-elite`/`sbi-
+signature-card` tier (its own asset path literally reads `Elite-Book-of-
+Rewards/...`) -- NEITHER includes `sbi-card-prime`. Reported this back
+rather than accepting the anchor figures at face value: SBI's own
+rewards-information FAQ (`sbicard.com/en/faq/rewards-information.page`,
+Q1) already told us why this can happen -- "SBICPSL reserves the right
+to decide the Reward points required... for each segment of credit
+cards" -- different card tiers get different catalog pricing for
+conceptually the same item, confirmed concretely, not just asserted.
+
+**What was built instead of hand-computing one ratio in a Python
+one-liner**: `compute/ingest/reward_catalog_ratio.py`, a new, reusable,
+tested tool -- Satya explicitly asked for this to be logged as a
+reference for future card ingestions, not a one-off calculation. The
+catalog page embeds its ENTIRE live product list as one JSON blob
+(`window.rewards = {...}`, found by inspecting the raw page source, not
+guessed) -- `extract_catalog_json` pulls and `json.loads`s it directly
+(replacing an earlier, more fragile regex-based extraction attempt that
+happened to get the right answer for the two examples checked by hand,
+but was abandoned once the real embedded-JSON shape was found -- exact
+parsing beats a regex that merely survived spot-checking). `segment_
+stats` filters to items (a) eligible for one named `card_key` and (b)
+stating an explicit INR/Rs face value in their own name (gift cards/
+vouchers only -- physical products like "Okhaya EV Helmet" have no
+stated value and are correctly excluded, not zero-valued), then reports
+median/mean/min/max per 100 points across that slice.
+
+**Why a distribution summary, not a single fact**: SBI's own catalog
+genuinely prices different items at different ratios even within ONE
+card's own eligible set -- PRIME's own 100 priced items range from
+Rs.3.03 to Rs.50.00 per 100 points (mass-market vouchers like Flipkart
+sit near 12-15/100; travel/luxury brands like Taj/ITC Hotels sit near
+24-25/100). There is no "true" ratio to recover this way, only a
+representative one -- this tool's output is logged explicitly as an
+ASSUMPTION-REGISTRY default (same status as `engine.normalise.DEFAULT_
+TICKET_SIZES`), never as a citable T&C fact, wherever it's written into
+a bundle.
+
+**Applied to PRIME**: `bundle_sbi_prime.json`'s currency gained a second
+route, `voucher_catalog` (`route_type="voucher"`, `ratio=0.1827` -- the
+mean of PRIME's own 100-item verified set, `n=100, median=17.4827,
+mean=18.2721, range=[3.0303, 50.0]` per the tool's live 2026-09-03 run).
+`statement_credit` stays exactly as it was -- unpriced, still genuinely
+unsourced (SBI's own FAQ: cash/statement-credit redemption isn't even
+self-service, it requires calling support or writing in, which is
+itself evidence there may be no single fixed rate to find at all, not
+just one nobody's published). `_review_checklist` item 1 updated to
+"partially resolved," not closed -- Satya approved proceeding with the
+mean-of-100-verified-items reading over the original 20-25 estimate.
+
+**A fourth engine finding, discovered while wiring the fix, not
+designed for**: `engine.valuation.value_currency` validates EVERY route
+on a currency (`for route in currency.routes: _validate_route(route)`),
+unconditionally -- so a currency with even ONE still-unpriced route
+(`statement_credit`) could never be valued through ANY route, including
+a fully-priced `voucher_catalog`. This makes sense given what the
+function is FOR (it also computes `v_cons`/`v_opt` across every route
+for the display range, not just the priced one) but is a real
+constraint worth knowing before the next points-based card hits it too:
+**a currency cannot be partially priced** in this engine -- every
+declared route needs a ratio (or to not be declared at all) before any
+valuation succeeds. Worked around at the TEST level only, not by
+editing the bundle's honest declared shape: `tests/test_golden_sbi_
+prime.py`'s `_valuation_currency()` builds a single-route view for the
+parts of Stage 8 that actually run, the same "load the real bundle,
+adapt only what's unsafe to evaluate as-is" pattern `test_golden_sbi_
+cashback.py`'s own `_adapt_ingestion_bundle` already established for
+`exclusions[]` -- not a new precedent invented for PRIME.
+
+**The standing refresh policy Satya asked to be logged explicitly**:
+this ratio is a snapshot, not a card feature. `reward_catalog_ratio.py`
+deliberately has NO caching and NO staleness detection -- every call
+re-fetches the live catalog; re-running the tool IS the refresh
+mechanism. **Before trusting `voucher_catalog`'s ratio for a PUBLISH
+decision** (not just this draft-stage golden), or before ingesting
+ANOTHER points-based card, re-run `python -m ingest reward-catalog-ratio
+--card <key>` fresh -- do not reuse a prior snapshot, and do not assume
+last month's numbers still hold. This applies whenever the card's own
+reward T&C changes too, independently of catalog drift.
+
+**Reference for future ingestions**: `compute/ingestion/reference_
+reward_point_values.json` -- the SAME 2026-09-03 run, logged for 9 SBI
+card segments at once (not just PRIME) precisely so the next real-card
+ingestion doesn't have to re-derive this from scratch, though it still
+MUST re-run the tool rather than trust this file's numbers once any
+time has passed or that card's own T&C is being read:
+
+| card_key | n | median/100pts | mean/100pts |
+|---|---|---|---|
+| sbi-card-prime | 100 | 17.48 | 18.27 |
+| sbi-card-elite | 108 | 17.86 | 18.82 |
+| sbi-platinum-card | 99 | 17.42 | 18.28 |
+| sbi-signature-card | 108 | 17.86 | 18.82 |
+| simplysave-card | 100 | 17.48 | 18.27 |
+| sbi-gold-and-more-card | 99 | 17.42 | 18.21 |
+| sbi-card-unnati | 98 | 17.62 | 18.39 |
+| titan-sbi-card | 8 | 25.00 | 25.00 (flat -- every item priced identically) |
+| bpcl-sbi-card | 42 | 17.12 | 17.51 |
+| air-india-sbi-signature-card | 101 | 17.86 | 18.83 |
+
+### Verification
+
+`tests/test_reward_catalog_ratio.py` (5 tests, synthetic fixture, no
+network): confirms JSON extraction, per-item rupee-value parsing (and
+correctly excluding unvalued physical products), per-segment statistics,
+and a clean "not_found" report for an absent card key. `tests/test_
+golden_sbi_prime.py` updated (6 tests, was 5): the currency-ratio test
+split into two (statement_credit still raises; voucher_catalog now
+prices correctly at exactly 31,200 * 0.1827 = Rs.5,700.24), and the main
+scenario test now runs the FULL `evaluate_card` orchestrator end to end
+(previously stopped short at Stage 7, since Stage 8 would have raised) --
+NACV steady-state = Rs.5,700.24, cross-checked against `golden_sbi_
+prime.json`'s own updated `_hand_computation`. Full suite: 385/385 green
++ 1 skipped (379 prior + 6, i.e. +1 net on the PRIME file's own count
+plus +5 new).
+
+Still not done: `ingest link`/`publish` remain deliberately un-run (same
+reasoning as #149) -- resolving item 1 partially doesn't change the
+publish-readiness bar; 11 other `_review_checklist` items (now 12,
+including this one's own refresh-policy note) still need Satya's read.
