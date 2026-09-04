@@ -1,0 +1,232 @@
+{
+  "bundle_id": "bpcl_octane_v1",
+  "key": "bpcl_octane_sbi",
+  "name": "BPCL SBI Card OCTANE",
+  "issuer_key": "sbi_card",
+  "network": "visa",
+  "effective_from": "2026-01-01",
+  "status": "draft",
+  "_sources": {
+    "reward_terms": {
+      "source_type": "reward_terms",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/ekit-tncs/BPCLOctanetnc.pdf",
+      "snapshot_note": "BPCL SBI Card OCTANE e-kit T&C -- fuel accelerator, reward points, fuel surcharge waiver. Section 11 (Reward Point Program) is the ingested reward source.",
+      "storage_path": "sources/sbi_card/reward_terms-2026-09-04.pdf",
+      "captured_at": "2026-09-04",
+      "reviewer_status": "unreviewed"
+    },
+    "mitc": {
+      "source_type": "mitc",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/most-important-terms-and-conditions/mitc-english.pdf",
+      "issuer_level": true,
+      "authoritative_for": [
+        "annual_fee",
+        "joining_fee",
+        "renewal_waiver_threshold",
+        "forex_markup",
+        "fuel_surcharge_generic_rate"
+      ],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/mitc-2026-08-31.pdf",
+      "captured_at": "2026-08-31",
+      "_note": "Issuer-level source already captured for CASHBACK SBI / SBI Card PRIME (docs/DECISIONS.md #143-146) -- reused here, not re-fetched. Same URL, same storage object."
+    }
+  },
+  "version": {
+    "joining_fee": 1499,
+    "annual_fee": 1499,
+    "gst_rate": 0.18,
+    "forex_markup": 0.035,
+    "_source": "mitc",
+    "_note": "MITC p.6 (visually rendered and read directly -- see docs/DECISIONS.md, the page's own table extracted inconsistently across two different pdftotext modes before this): 'BPCL SBI Card Octane' row -- Annual Fee (=our joining_fee, first-year) Rs.1,499, Renewal Fee (=our annual_fee, subsequent years) Rs.1,499 (Waived off on annual spends of Rs.2 Lakh or more in the preceding year). Forex 3.5% per MITC p.30 Section N: 'For all cards except AURUM, Elite, Prime NRI secured, Tata Neu Infinity SBI Credit Card, SBI Card Miles Elite/ Miles Prime/ Miles' -- OCTANE is not in the exception list (same citation already confirmed for PRIME)."
+  },
+  "currency": "bpcl_octane_points",
+  "currencies": [
+    {
+      "key": "bpcl_octane_points",
+      "routes": [
+        {
+          "key": "bpcl_redemption",
+          "route_type": "voucher",
+          "ratio": 0.25,
+          "flat_redemption_fee": 0,
+          "_source": "reward_terms",
+          "_note": "ISSUER-STATED, not estimated -- TWO independent citations in the same document agree exactly. Sec 11.4(a) bullet 7: '4 Reward Point gives you `1 of free fuel. There is No minimum limit of Reward Points required for Instant Redemption.' Sec 11.5(d): 'Redemption conversion will be 4 Reward Points for `1' (instant PoS redemption at BPCL outlets). Both give ratio=0.25 (Rs/point) -- min_points left unset (None) since the source explicitly says 'No minimum limit'. flat_redemption_fee=0: MITC p.31's Rs.99 Rewards Redemption Fee applies to 'Physical products, Statement Credit & on Vouchers that are sent physically' -- this route is BPCL e-vouchers/instant PoS redemption, electronic/immediate, not physically mailed, read as exempt (same reasoning as SBI Card PRIME's voucher_catalog route, docs/DECISIONS.md #153)."
+        },
+        {
+          "key": "shop_n_smile_catalog",
+          "route_type": "voucher",
+          "ratio": 0.1751,
+          "flat_redemption_fee": 0,
+          "_source": "reward_terms",
+          "_note": "ASSUMPTION-REGISTRY DEFAULT, ESTIMATED-NOT-ISSUER-STATED (unlike bpcl_redemption above) -- Sec 11.4(a) bullet 7 also allows redeeming 'for exclusive products in lifestyle, leisure, and travel categories across major brands at SBI Card's exclusive Reward Point Program -Shop n Smile', and Sec 11.4(i) defers its generic mechanics to https://www.sbicard.com/en/tnc.page -- but neither states a fixed rupee-per-point ratio for that catalog (same genuine absence already confirmed for PRIME, docs/DECISIONS.md #150). Reused `python -m ingest reward-catalog-ratio --card bpcl-sbi-card` (re-run fresh on 2026-09-04, not reused stale from compute/ingestion/reference_reward_point_values.json's 2026-09-03 snapshot, per that tool's own refresh_policy -- confirmed byte-identical: n=42, median=17.1241/100pts, mean=17.5121/100pts). ratio=0.1751 is that mean. Lower-value than bpcl_redemption (0.25) -- a rational cardholder redeems via bpcl_redemption, so this route is NOT the golden's priced route (documented for completeness/future reference only). flat_redemption_fee=0, same e-voucher/'not sent physically' reasoning as bpcl_redemption and PRIME's voucher_catalog."
+        }
+      ],
+      "_source": "reward_terms",
+      "_note": "Points-based currency, same general shape as SBI Card PRIME's sbi_prime_points -- Sec 11.4(a) bullet 4: '1 Reward Point on all other retail spends, except fuel (1 RP = `0.25)'. Unlike PRIME, OCTANE's OWN T&C states its headline redemption ratio directly (bpcl_redemption above) -- no empirical derivation needed for the PRIMARY route this bundle prices at, only for the secondary catalog alternative."
+    }
+  ],
+  "earning_rules": [
+    {
+      "key": "bpcl_fuel_25x",
+      "selector": {
+        "categories": ["fuel"],
+        "merchant_groups": ["bpcl"]
+      },
+      "accrual": {
+        "type": "per_unit",
+        "unit_amount": 100,
+        "points_per_unit": 25,
+        "rounding": "floor_per_txn",
+        "currency": "bpcl_octane_points"
+      },
+      "caps": ["cap_bpcl_fuel_cycle"],
+      "priority": 100,
+      "_source": "reward_terms",
+      "_note": "Sec 11.4(a) bullet 1.1: '7.25% Value back - 25X Reward Points on fuel purchases. 25 Reward Points per `100 on BPCL Fuel spends (Max. of 2500 Reward Points per statement cycle) & Fuel Surcharge waiver on BPCL Pumps will be credited...'. Internal consistency check: 25RP * ratio 0.25 = Rs.6.25 per Rs.100 (6.25%) + the ~1% surcharge waiver = 7.25% -- matches the bullet's own stated headline figure exactly, corroborating both this rate AND the redemption ratio independently. Scoped merchant_groups=['bpcl'] because the T&C is explicit this rate is for 'BPCL Fuel spends' specifically, not fuel generically -- see the currency-wide _engine_gap note below for how non-BPCL fuel is kept out of the base rate without an eligibility.py exclusion (a genuinely new technique this card required, not previously used by CASHBACK/PRIME)."
+    },
+    {
+      "key": "category_accelerator_10x",
+      "selector": {
+        "categories": ["dining", "departmental_stores", "grocery", "movies"]
+      },
+      "accrual": {
+        "type": "per_unit",
+        "unit_amount": 100,
+        "points_per_unit": 10,
+        "rounding": "floor_per_txn",
+        "currency": "bpcl_octane_points"
+      },
+      "caps": ["cap_category_accelerator_monthly"],
+      "priority": 90,
+      "_source": "reward_terms",
+      "_note": "Sec 11.4(a) bullet 2: '10X Reward Points on every `100 spent on Groceries, Departmental stores, Movies & Dining.' MCCs (bullet 2's own table): Groceries 5411, Departmental stores 5311, Movies 7832 AND 7922 (PRIME's own bundle only cited 7832 for movies -- OCTANE's source additionally lists 7922; documentation-only difference, category-mode matching doesn't use MCC for earning-rule selectors regardless, see match.py's own SUPPORTED_SELECTOR_FIELDS). Dining 5812/5813/5814. 'departmental_stores'/'movies' are the same two non-registry categories PRIME already introduced (docs/DECISIONS.md's PRIME entry) -- not re-added here as a new gap."
+    },
+    {
+      "key": "base_1x",
+      "selector": {
+        "categories": [
+          "grocery", "quick_commerce", "dining", "food_delivery", "ecommerce", "offline_retail",
+          "utilities", "entertainment", "domestic_flights", "international_flights", "hotels_domestic",
+          "insurance", "rent", "education", "wallet", "jewelry", "gift_novelty", "railways",
+          "quasi_cash", "digital_gaming", "tolls", "government", "departmental_stores", "movies"
+        ]
+      },
+      "accrual": {
+        "type": "per_unit",
+        "unit_amount": 100,
+        "points_per_unit": 1,
+        "rounding": "floor_per_txn",
+        "currency": "bpcl_octane_points"
+      },
+      "priority": 10,
+      "_source": "reward_terms",
+      "_note": "Sec 11.4(a) bullet 4: '1 Reward Point on all other retail spends, except fuel (1 RP = `0.25).' INFERRED: the 'per `100' basis isn't explicitly restated for this bullet the way bullets 1.1/1.2/2/3 all explicitly say '... per `100' -- inferred by pattern-matching against every other bullet in this same section and PRIME's own identical-shaped base rule, not itself a verbatim citation. ENGINE GAP (new, not one of PRIME's four): the Selector vocabulary has no negation/'categories exclude' primitive -- 'base rate on everything except fuel' is only expressible by positively enumerating every OTHER known category (every key in engine.normalise.DEFAULT_TICKET_SIZES, plus PRIME's 'departmental_stores'/'movies' additions), omitting 'fuel'. This works correctly for every category any card in this repo has used so far, but is fragile in principle: a brand-new category introduced by a FUTURE card's ingestion would need this bundle's own selector list updated too, or OCTANE would silently under-reward spend in it (rather than the intended 1RP/`100). Chosen over the alternative (a blanket eligibility.py fuel exclusion) because that would ALSO zero out bpcl_fuel_25x's own reward -- Stage 3 only ever sees eligible.reward, so a category-wide exclusion can't spare one merchant_group within it (the same class of conflict CASHBACK's fuel surcharge waiver hit and solved by moving OUT of the reward pipeline entirely, docs/DECISIONS.md #131/#132 -- not applicable here since 25X fuel earning IS a genuine reward, not a cost offset, so it can't be moved to costs.py the way CASHBACK's waiver was)."
+    }
+  ],
+  "caps": [
+    {
+      "key": "cap_bpcl_fuel_cycle",
+      "measure": "reward",
+      "amount": 2500,
+      "window_def": {
+        "kind": "statement_cycle"
+      },
+      "scope": "rule",
+      "overflow": "zero",
+      "_source": "reward_terms",
+      "_note": "Sec 11.4(a) bullet 1.1: 'Max. of 2500 Reward Points per statement cycle.' overflow=zero is INFERRED, not explicitly stated -- by elimination, since fuel is excluded from base_1x's own rate ('except fuel'), there is no fallback rate for OCTANE to revert to once this cap binds (unlike PRIME's equivalent accelerator cap, which explicitly states 'the cardholder will accrue 2 Reward Point per Rs.100' after capping -- OCTANE's own bullet 1.1 states no such fallback). Bullet 6 ('Reward Points can be earned for a maximum spend of `10000/- per month') read as a RESTATEMENT of this SAME cap in spend-domain terms, not a second independent cap -- 2,500 RP / (25 RP per Rs.100) = Rs.10,000 exactly, an exact arithmetic match against the stated Rs.10,000/month figure. Statement-cycle approximated as calendar-month for MVP (same convention as CASHBACK/PRIME, Part A SS A.17)."
+    },
+    {
+      "key": "cap_category_accelerator_monthly",
+      "measure": "reward",
+      "amount": 7500,
+      "window_def": {
+        "kind": "calendar_month"
+      },
+      "scope": "rule",
+      "overflow": "base_rate",
+      "_source": "reward_terms",
+      "_note": "Sec 11.4(a) bullet 3: 'Cumulative 10X Reward Points accrued per `100 spent on Groceries, Departmental Stores, Movies & Dining ... will have a maximum cap of 7,500 Reward Points per month.' overflow=base_rate is INFERRED by elimination (unlike PRIME's own identically-structured cap, whose source explicitly states the post-cap fallback rate) -- grocery/dining/departmental_stores/movies are NOT 'fuel', so base_1x's own selector (which lists them) is the only coherent fallback once this cap binds. RECURRING ENGINE GAP, same as SBI Card PRIME's own gap #1 (docs/DECISIONS.md's PRIME entry, #11/#32's pre-existing deferral): this cap pools FOUR distinct categories into ONE combined monthly limit -- engine.caps.apply_caps raises ValueError if more than one of {dining, departmental_stores, grocery, movies} has spend in the SAME calendar month while the cap needs trimming. Confirms this is a recurring structural gap, not PRIME-specific -- both real cards ingested so far that have an SBI-style multi-category accelerator hit it identically. The proposed golden below avoids it by spending in only ONE of the four categories (grocery), same workaround PRIME's own golden used."
+    }
+  ],
+  "exclusions": [
+    {
+      "key": "wallet_exclusion",
+      "selector": {
+        "mcc_include": [6540, 6541]
+      },
+      "excluded_from": ["rewards"],
+      "_source": "reward_terms",
+      "_note": "Sec 11.4(b): 'e-Wallet loading/recharge transactions identified under MCCs 6540 and 6541 (W.e.f. 1st July 2020)' -- not eligible for Reward Points. Same MCCs, same mechanism as CASHBACK/PRIME's own wallet exclusions."
+    },
+    {
+      "key": "rent_exclusion",
+      "selector": {
+        "categories": ["rent"]
+      },
+      "excluded_from": ["rewards"],
+      "_source": "reward_terms",
+      "_note": "Sec 11.4(b): 'W.e.f. 15 Apr 2024, accrual of Reward Points on Rent Payment transactions with BPCL SBI Card Octane will be discontinued. Rent Payment transactions shall be identified under Merchant Category Code (MCC) 6513.' Currently in effect (this bundle's effective_from is 2026-01-01, well after the 2024 discontinuation date). Modelled as a category-level exclusion (categories=['rent']) rather than mcc_include=[6513] -- category-mode's own category_mcc_map registers BOTH 6513 and 7349 under 'rent' (no sub-MCC granularity below the category level exists anywhere in this engine), so the two selectors are equivalent in practice; categories=['rent'] is the more direct expression of the same effective exclusion. Non-BPCL fuel / generic 'petrol pumps and service stations' (also named as excluded in Sec 11.4(b)) needs NO separate exclusion entry here -- it's handled structurally by base_1x's own selector omitting 'fuel' entirely, see that rule's _note."
+    }
+  ],
+  "thresholds": [
+    {
+      "key": "fee_waiver",
+      "basis": {
+        "measure": "waiver_eligible_spend",
+        "window": {
+          "kind": "anniversary_year"
+        }
+      },
+      "tier_mode": "cumulative",
+      "tiers": [
+        {
+          "tier_index": 1,
+          "threshold_amount": 200000,
+          "payload": {
+            "type": "waive_fee",
+            "fee": "annual"
+          }
+        }
+      ],
+      "_source": "mitc",
+      "_note": "MITC p.6: 'BPCL SBI Card Octane ... 1,499 (Waived off on annual spends of Rs.2 Lakh or more in the preceding year).' Waiver-eligible spend read as all spend (same convention as CASHBACK/PRIME, no exclusion clause found attached to the waiver threshold itself, distinct from the reward-side category/MCC exclusions above)."
+    }
+  ],
+  "surcharges": [
+    {
+      "key": "fuel_surcharge_waiver",
+      "selector": {
+        "categories": ["fuel"],
+        "merchant_groups": ["bpcl"]
+      },
+      "rate": 0.01,
+      "waiver": {
+        "rate": 0.01,
+        "txn_max": 4000,
+        "cap_amount": 100,
+        "cap_window": {
+          "kind": "calendar_month"
+        }
+      },
+      "gst_on_surcharge": 0.18,
+      "_source": "reward_terms",
+      "_note": "Sec 11.4(a) bullet 5: 'No Minimum Threshold. Fuel Surcharge Waiver applicable only on BPCL Fuel transactions upto `4000/- for a max of `100/- per month.' Underlying 1% generic fuel surcharge rate from MITC's own Section N: '1% of transaction amount + all applicable taxes... Fuel surcharge waiver terms and conditions may vary, refer product T&Cs for details' -- this bundle's own reward_terms IS that product T&C. Scoped merchant_groups=['bpcl'] to match 'applicable only on BPCL Fuel transactions' exactly -- non-BPCL fuel's own (un-waived) 1% surcharge is NOT modelled in this bundle (accepted gap, immaterial for a BPCL-branded co-brand card's realistic spend profile; see _review_checklist). txn_max=4000 accepted-but-unenforced-and-flagged, same posture as CASHBACK's own waiver (no per-transaction data in category mode). No txn_min this time -- source explicitly says 'No Minimum Threshold', unlike CASHBACK's Rs.500 floor. UNLIKE CASHBACK: fuel is NOT excluded from rewards here (bpcl_fuel_25x earns points on the SAME spend this waiver discounts) -- both mechanisms read independently from the same raw spend segments in different pipeline stages (Stage 3-5 rewards vs Stage 10 costs), no eligibility-mask conflict to route around this time."
+    }
+  ],
+  "benefits": [],
+  "_review_checklist": [
+    "1. [Inferred, low risk] base_1x's '1 RP per `100' basis is pattern-matched from surrounding bullets, not itself restated with 'per `100' wording in Sec 11.4(a) bullet 4. See that rule's own _note.",
+    "2. [Real, sourced, deliberately UNMODELED] Sec 11.4(a) bullet 1.2: 25X Reward Points on Bharat Gas (Website & App only) LPG cylinder bookings, capped 500 RP/billing cycle. No 'LPG'/'gas' category exists in engine.normalise's registry, and this is a niche channel-specific accelerator not needed for the proposed golden -- left out of earning_rules[] entirely (same posture as PRIME's own unmodeled birthday/utility-SI accelerators), not forced in.",
+    "3. [ENGINE GAP, new, not one of PRIME's four] No selector negation/'categories exclude' primitive exists anywhere (match.py's Selector or eligibility.py's ExclusionSelector) -- 'base rate on everything except fuel' is only expressible via positive enumeration of every other known category. See base_1x's own _note for the full reasoning and its fragility (a future new category would need this bundle updated too).",
+    "4. [RECURRING, same as PRIME's gap #1] cap_category_accelerator_monthly pools FOUR categories into one cap -- engine.caps.apply_caps's pre-existing 'multi-category pooled caps aren't supported yet' guard (docs/DECISIONS.md #11/#32) fires identically to PRIME's own accelerator cap. Confirms this is a structural gap recurring across real cards, not specific to PRIME. Golden avoids it (grocery-only among the four).",
+    "5. [Confirmed absent via direct source check, not merely unfound] A web search surfaced third-party aggregator claims (bankbazaar/paisabazaar-style sites) of a 'Welcome Bonus of 6,000 reward points' and '4 complimentary lounge visits at domestic airports' for this card. Searched the full 52-page official reward_terms PDF directly for 'lounge', 'airport', 'complimentary', 'welcome bonus', '6000'/'6,000' -- ZERO matches anywhere. Per Part I SS I.0, third-party summaries are not a source -- deliberately NOT included in this bundle. Either these benefits don't exist on the current T&C, or belong to a different/discontinued variant or promotional period; needs Satya's read if he wants this chased further.",
+    "6. [Same gap as PRIME, confirmed recurring] Sec 11.4(b): accelerated Reward Points on Departmental Stores/Grocery Stores are excluded for merchants 'Metro Cash & Carry and Walmart' specifically -- same merchant-name-level carve-out PRIME's own Sec 11.1(b) has for the identical two merchants. No merchant-name selector exists (only merchant_group, with no registry entry for these retailers) -- unmodeled, same as PRIME.",
+    "7. [RedemptionFees(c) gap -- NOT re-hit, already closed] MITC p.31's Rs.99 Rewards Redemption Fee is real and citable for this card too, but both of this bundle's routes read as exempt (e-vouchers/instant PoS, not 'sent physically') -- flat_redemption_fee=0 on both, using the engine.costs.redemption_fees_cost machinery closed for PRIME (docs/DECISIONS.md #153). Confirms that gap's fix generalises to a second card without further engine changes.",
+    "8. [NOT re-hit] SS I.8's 'every route must be priced before any route can be valued' constraint (PRIME's gap #4, engine.valuation.value_currency) does not apply here -- BOTH of this currency's routes (bpcl_redemption, shop_n_smile_catalog) have a real ratio; there is no unpriced route on this card the way PRIME's statement_credit was.",
+    "9. [NOT applicable] PRIME's gap #2 (fee-triggered voucher grant, no ThresholdBasis.measure for fee-payment) and gap #3 (two-tier benefit cap) don't recur -- OCTANE has no welcome-gift-with-value benefit and no countable benefit (lounge or otherwise) in its sourced T&C at all, confirmed via item 5's direct check above.",
+    "10. Forex 3.5% and joining_fee=annual_fee conventions -- see version._note for exact citations.",
+    "11. Movies MCC list (7832 AND 7922) differs slightly from PRIME's own citation (7832 only) -- documentation-only, category-mode matching doesn't use MCC for earning-rule selection regardless. See category_accelerator_10x's own _note."
+  ]
+}

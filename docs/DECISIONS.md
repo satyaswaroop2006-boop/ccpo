@@ -4938,3 +4938,148 @@ confirmed directly, not assumed), NACV steady-state = Rs.5,700.24,
 byte-identical to the published golden. No re-link, re-publish, or
 schema migration needed -- the already-published row was already
 correct under the new logic by construction.
+
+### 154. BPCL SBI Card OCTANE drafted through CAPTURE/DRAFT/LINT -- third
+real card, first fuel card, first waiver-that-actually-contributes-value
+
+Chosen deliberately to stress dimensions CASHBACK/PRIME didn't: a fuel
+surcharge waiver on a card where fuel EARNS rewards (unlike CASHBACK's
+reward-excluded fuel), accelerated-category earning as the card's core
+mechanic, and a second real reward-points currency re-testing PRIME's
+valuation machinery. NOT linked or published -- stays `draft`, same
+posture as PRIME's own first pass, pending Satya's independent read of
+the golden and the checklist.
+
+**Capture**: `ingest capture` fetched the OCTANE reward T&C cleanly (52
+pages, no self-declared total to cross-check against -- same as PRIME's
+own capture). MITC reused verbatim (already captured for CASHBACK/PRIME).
+
+**A real extraction pitfall caught before it became a wrong fact**:
+`pdftotext -layout` and `pdftotext -raw` DISAGREED on OCTANE's own MITC
+fee-table row -- `-layout` read Annual/Renewal Fee = 1,499/1,499
+(waived @ Rs.2L), `-raw`'s positional column-reconstruction (matching N
+card names to N fee values in stream order) suggested 2,999 instead.
+Neither was trusted blindly: installed `pymupdf` (diagnostic use only,
+not added to `requirements.txt`) and rendered the actual PDF page as an
+image to read the table visually -- confirmed `-layout` was right,
+`-raw`'s positional reconstruction had silently misattributed a
+neighbouring row's value. Logged as a reusable technique: when two
+text-extraction modes of the SAME PDF disagree on a table value, render
+the page as an image and read it, don't average or guess between them.
+
+**Draft, from the source's literal text only**:
+- `bpcl_fuel_25x` (25 pts/`100, capped 2,500/statement cycle, scope=rule)
+  -- Sec 11.4(a) bullet 1.1's own stated "7.25% Value back" cross-checks
+  exactly against 25pts x ratio 0.25 (6.25%) + the ~1% surcharge waiver
+  (7.25%), corroborating both the accrual rate AND the redemption ratio
+  independently, from one sentence.
+- `category_accelerator_10x` (10 pts/`100 on dining/departmental_stores/
+  grocery/movies, capped 7,500/month) -- structurally identical to
+  PRIME's own accelerator, MCCs match except OCTANE additionally cites
+  7922 for movies (documentation-only, category-mode doesn't match
+  earning rules by MCC).
+- `base_1x` (1 pt/`100 on everything except fuel) -- see the ENGINE GAP
+  below for how "except fuel" is expressed.
+- `fuel_surcharge_waiver` (1% surcharge, fully waived up to Rs.100/month,
+  no minimum threshold, scoped to BPCL fuel specifically) -- MITC's own
+  generic 1% fuel surcharge, waived per OCTANE's own product T&C (the
+  MITC explicitly defers: "Fuel surcharge waiver terms and conditions
+  may vary. Refer product T&Cs for details").
+- Reward currency `bpcl_octane_points`, two routes: `bpcl_redemption`
+  (ratio=0.25, ISSUER-STATED -- two independent citations in the same
+  document agree exactly: bullet 7's "4 Reward Point gives you `1 of
+  free fuel" and Sec 11.5(d)'s "Redemption conversion will be 4 Reward
+  Points for `1", a materially better provenance than PRIME's own
+  empirically-derived ratio) and `shop_n_smile_catalog` (ratio=0.1751,
+  ESTIMATED-NOT-ISSUER-STATED, `ingest reward-catalog-ratio --card
+  bpcl-sbi-card` re-run fresh on 2026-09-04 rather than reused stale
+  from PRIME's own 2026-09-03 reference snapshot -- confirmed
+  byte-identical, no drift). `bpcl_redemption` is the golden's priced
+  route (objectively better value, 0.25 > 0.1751).
+- Fees (MITC, visually confirmed per above): joining=annual=Rs.1,499,
+  waived at Rs.2,00,000 annual spend.
+- `wallet_exclusion` (MCC 6540/6541) and `rent_exclusion` (MCC 6513,
+  discontinued 15 Apr 2024, currently in effect) -- same mechanism as
+  CASHBACK/PRIME.
+
+**A genuinely new engine gap, not one of PRIME's four**: no selector
+negation primitive exists anywhere (`match.Selector` or `eligibility.
+ExclusionSelector`) -- "base rate on everything except fuel" can't be
+expressed as a true exclusion. A blanket `categories=['fuel']`
+eligibility exclusion was considered and rejected: Stage 3 only ever
+sees `eligible.reward`, so excluding fuel category-wide would ALSO zero
+out `bpcl_fuel_25x`'s own reward -- the same class of conflict CASHBACK's
+fuel surcharge waiver hit (#131/#132), but NOT solvable the same way
+here, since 25X fuel earning is a genuine reward, not a cost offset that
+can be moved into `costs.py`. Solved instead by positively enumerating
+every OTHER known category on `base_1x`'s own selector (every key in
+`engine.normalise.DEFAULT_TICKET_SIZES` plus PRIME's `departmental_
+stores`/`movies` additions, omitting `fuel`) -- correct for every
+category any card in this repo has used so far, but fragile in
+principle: a brand-new category a FUTURE card introduces would need this
+bundle's own selector list updated too, flagged explicitly rather than
+left as a silent trap.
+
+**Answering the task's own question -- which of PRIME's four gaps
+recur**: #1 (multi-category pooled cap) RECURS identically (same
+`apply_caps` guard, same four categories, confirming it's structural,
+not PRIME-specific). #2 (fee-triggered voucher grant) and #3 (two-tier
+benefit cap) do NOT recur -- OCTANE has no welcome-gift-with-value
+benefit and no countable benefit in its sourced T&C at all (a real fact
+about the card, not a modelling gap). #4 (every route must be priced
+before any can be valued) does NOT recur -- both of OCTANE's routes have
+a real ratio; there's no unpriced route the way PRIME's `statement_
+credit` was. #153's `flat_redemption_fee` fix (closed for PRIME last
+session) is confirmed to generalise cleanly to a second card without
+further engine changes -- both OCTANE routes read as exempt from MITC's
+Rs.99 fee (e-vouchers/instant PoS, not "sent physically"), same
+reasoning as PRIME's `voucher_catalog`.
+
+**Third-party claims checked and rejected**: a web search surfaced
+aggregator-site claims of a "Welcome Bonus of 6,000 reward points" and
+"4 complimentary lounge visits at domestic airports." Searched the full
+52-page official T&C directly for "lounge"/"airport"/"complimentary"/
+"welcome bonus"/"6000" -- zero matches anywhere. Per Part I SS I.0, a
+third-party summary is not a source -- neither claim is in this bundle.
+Flagged for Satya rather than silently dropped, in case he wants it
+chased further (a different/discontinued variant, or promotional-period
+benefit not in the current T&C).
+
+**Also confirmed unmodeled, deliberately**: Bharat Gas's own 25X LPG
+accelerator (bullet 1.2, real and sourced -- no "LPG"/"gas" category
+exists in the registry, and it's not needed for the proposed golden) and
+the Metro Cash & Carry/Walmart merchant-level carve-out from the
+category accelerator (the SAME gap PRIME's own Sec 11.1(b) has for the
+identical two merchants -- confirmed recurring, not re-logged as new).
+
+**Proposed golden**: Rs.8,000/month BPCL fuel + Rs.10,000/month grocery
++ Rs.20,000/month ecommerce. 38,400 gross points/year, fee waived,
+fuel surcharge fully waived (Rs.94.40/month gross, fully offset -- would
+have been Rs.1,132.80/year uncharged without the waiver, the concrete
+value figure the task asked to make legible), NACV steady-state =
+Rs.9,600.00, NACV year-1 = Rs.7,831.18. PROPOSED, not validated --
+`golden_bpcl_octane.json`'s own `_hand_computation` opens by saying so
+explicitly, same discipline as every prior real-card golden in this
+repo. `ingest lint` passes cleanly.
+
+### Verification
+
+`tests/test_golden_bpcl_octane.py` (8 tests, all independently
+confirming): the bundle loads correctly; both routes are genuinely
+priced (gap #4 doesn't recur); BPCL fuel matches ONLY the 25X
+accelerator, never double-counting into the base rate; non-BPCL fuel
+earns exactly Rs0 (proving the enumeration workaround actually works,
+not just that it doesn't crash); the multi-category cap gap recurs
+identically to PRIME's own proof; the fuel surcharge waiver both fully
+offsets at the golden's own Rs.8,000/month AND genuinely caps with a
+residual at a higher Rs.20,000/month (proving it's a real cap, not an
+unconditional Rs0); and the full `evaluate_card` orchestrator matches
+the golden's own hand computation exactly, including a fresh field
+sourced from #153's own fix (RedemptionFees, correctly Rs.0.00 given
+both routes read as fee-exempt). Full suite: 404/404 green + 1 skipped
+(396 prior + 8 new).
+
+Not done, deliberately: `ingest link`/`publish` not run -- same bar as
+every prior real-card ingestion, pending Satya's independent
+confirmation of the golden's numbers and the 11-item `_review_checklist`
+against source.
