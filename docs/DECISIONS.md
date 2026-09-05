@@ -5268,3 +5268,116 @@ Re-ran the full suite after the golden-file text update (no expected
 values changed, only the disclaimer language) -- still 412/412 green +
 1 skipped. No new engine or test code this entry; purely a pipeline
 run plus a documentation update reflecting Satya's resolutions.
+
+### 157. First BATCH ingestion -- five PRIME-family co-brand cards
+(Bank of Maharashtra, PSB, UCO Bank, City Union Bank, Karnataka Bank
+SBI Card PRIME), drafted/linted/linked together to validate the batch
+process itself before harder families
+
+Satya's own framing: prove batching works on the easiest possible
+family -- five co-brand variants of the already-ingested, already-
+verified base SBI Card PRIME (docs/DECISIONS.md #150-153) -- before
+batching harder ones. Same logic as validating single-card ingestion
+on CASHBACK first.
+
+**Process actually followed** (Satya's own A-F steps): CAPTURE all
+five first (deduping Bank of Maharashtra/PSB's shared 29pp `PRIMe-
+TnCekit.pdf` -- captured once, referenced twice; UCO/City Union Bank/
+Karnataka Bank each fetched independently as genuinely distinct 51pp
+"banking-ekit" files). Drafted ONE card at a time against base PRIME's
+own bundle as the structural template, verifying -- not assuming --
+each card's own captured booklet before writing anything, committing
+after each completed card (two commits mid-batch: BOM+PSB, then UCO+
+CUB, before this final entry covering Karnataka + the batch write-up).
+A shared parametrized test file (`tests/test_golden_prime_family.py`)
+replaced five near-duplicate ~250-line test files -- a deliberate
+engineering call given the five cards' confirmed-identical structure,
+not a shortcut past per-card verification (every card still gets its
+own bundle, golden, and parametrized test case).
+
+**Headline finding -- the batch's own required verdict**: the "PRIME
+family = same structure, different fees" hypothesis this batch set out
+to test UNDERSHOT reality. All five co-brand cards are identical to
+base PRIME not just in reward STRUCTURE (confirmed via direct text
+comparison of each card's own booklet: same base 2pt/accelerated 10pt
+on dining/departmental_stores/grocery/movies, same MCCs, same 7,500pt/
+month cap, same fuel exclusion, same Rs.3,000 fee-gated welcome gift,
+same 4/year international Priority Pass with the same 2/quarter sub-
+cap) but in the specific FEE NUMBERS too (confirmed via a VISUAL render
+of the MITC's own fee table, not the garbled multi-column text
+extraction -- pages 8/9/11 read directly as images): Rs.2,999/Rs.2,999,
+waived at Rs.3,00,000, forex 3.5% for every one of the five. NO
+structural divergence was found in any of the five -- every proposed
+golden mirrors base PRIME's own scenario exactly and produces a BYTE-
+IDENTICAL NACV (Rs.5,700.24 steady-state / Rs.2,161.42 year-1),
+verified per card independently, not assumed from the family framing.
+
+**One real, non-trivial divergence found and flagged, not silently
+smoothed over**: UCO Bank/City Union Bank/Karnataka Bank's own
+"banking-ekit" booklets (distinct 51pp template from BOM/PSB's shared
+29pp file) state the e-wallet reward exclusion (MCCs 6540/6541) by
+CROSS-REFERENCE to the generic Shop-and-Smile Rewards Program T&Cs
+page rather than in-document (BOM/PSB/base PRIME all state it
+directly). That external page was fetched and read in full to confirm
+it independently states the same exclusion (worded "on best effort
+basis w.e.f 1st July 2020") before modelling it for these three cards
+-- not carried over from the family assumption without checking. This
+is a documentation-structure difference, not an economics one: same
+MCCs, same effect, zero impact on any modelled number. Flagged
+explicitly in each of the three bundles' own `_review_checklist`
+rather than treated as equivalent to BOM/PSB's direct citation.
+
+**A second, smaller genuine content difference, this card only**:
+Karnataka Bank's own Welcome Gift clause explicitly DEFINES "eligible
+year" ("the year in which the fee is paid for by the Cardholder",
+with a worked example) -- a detail every other card in this family
+(including base PRIME) leaves implicit. Noted in the bundle, doesn't
+change the modelled value (the engine gap is the fee-payment GATING
+mechanism itself, not the year-scoping detail).
+
+**voucher_catalog's ratio (0.1827 Rs/point) was REUSED from base
+PRIME's own already-derived `reference_reward_point_values.json` entry
+for all five cards, not re-run per card** -- justified because
+`sbi_prime_points` is a SHARED issuer-level currency (confirmed via
+#151: the `redemption_routes` row lives on the CURRENCY, not per-card)
+and the underlying Shop-and-Smile catalog a cardholder redeems against
+is identical regardless of which bank co-brands the physical card.
+Confirmed directly against the live DB: `_resolve_currency` in
+`ingest/link.py` returns the EXISTING `sbi_prime_points` currency_id
+for every one of the five cards without touching its routes at all
+(`if row is not None: return existing_id, False, []`) -- so even
+though every bundle file declares BOTH `statement_credit` (unpriced)
+and `voucher_catalog` routes for source-honesty (matching base PRIME's
+own pattern), only the DB's existing single `voucher_catalog` route
+(ratio=0.182700) is ever actually used; #151's original schema
+workaround (linking with `voucher_catalog` only, since `redemption_
+routes.ratio` is `NOT NULL`) never needed to be repeated for any of
+the five, since the currency was already resolved by base PRIME.
+
+**Verified, not self-certified**: every one of the five golden
+scenarios was checked stage-by-stage by hand (normalise -> eligibility
+-> match -> accrue -> caps -> thresholds -> valuation -> benefits ->
+costs -> fees -> NACV) in each bundle's own `_hand_computation` block,
+then cross-checked against `evaluate_card`'s own output via the shared
+parametrized test file -- never "the engine produced X so expected=X".
+All five explicitly marked "PROPOSED, NOT YET INDEPENDENTLY VERIFIED"
+pending Satya's own confirmation, same discipline as every prior real
+card.
+
+**Pipeline status per card**: all five CAPTURE -> DRAFT -> LINT ->
+LINK complete. `ingest review-queue` confirms 45 unreviewed
+`source_link`s across the 5 card groups (9 each), exactly as expected.
+`ingest publish` NOT run for any of the five -- per Task E, nothing
+publishes until Satya confirms each golden and checklist.
+
+### Verification
+
+`tests/test_golden_prime_family.py` (5 parametrized test functions x 5
+cards = 25 test cases): bundle structure matches base PRIME's own
+shape for every card; `voucher_catalog`'s ratio is the reused 0.1827
+value (not re-derived) for every card; the multi-category pooled-cap
+gap recurs identically for every card; `welcome_gift_voucher` reports
+0/`not_granted` honestly for every card; and the full `evaluate_card`
+orchestrator matches each card's own golden AND base PRIME's own NACV
+numbers exactly, for every card. Full suite: 437/437 green + 1 skipped
+(412 prior + 25 new).

@@ -71,6 +71,7 @@ CARDS = [
     ("prime_psb", "bundle_sbi_prime_psb.json", "golden_sbi_prime_psb.json"),
     ("prime_uco", "bundle_sbi_prime_uco.json", "golden_sbi_prime_uco.json"),
     ("prime_cub", "bundle_sbi_prime_cub.json", "golden_sbi_prime_cub.json"),
+    ("prime_ktb", "bundle_sbi_prime_ktb.json", "golden_sbi_prime_ktb.json"),
 ]
 
 

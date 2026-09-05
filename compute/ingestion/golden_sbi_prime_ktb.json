@@ -1,0 +1,53 @@
+{
+  "scenario_A_steady_state_points_and_fee": {
+    "spend_annual": {
+      "grocery": 240000,
+      "ecommerce": 360000
+    },
+    "_hand_computation": [
+      "PROPOSED, NOT YET INDEPENDENTLY VERIFIED (beyond a self-consistency cross-check against",
+      "evaluate_card's own output) -- same discipline as every prior real card in this repo. This",
+      "scenario deliberately MIRRORS base SBI Card PRIME's own golden_sbi_prime.json scenario exactly",
+      "because bundle_sbi_prime_ktb.json's own _review_checklist items 1/3 confirm -- via direct text",
+      "comparison of THIS card's own distinct 51pp booklet and a visual read of the MITC's own fee",
+      "table -- that this card's reward RATES, fees, waiver threshold, and forex rate are IDENTICAL to",
+      "base PRIME's.",
+      "",
+      "Normalise: grocery 240000/12=Rs.20,000/mo; ecommerce 360000/12=Rs.30,000/mo.",
+      "Eligibility (Stage 2): neither category is fuel/wallet.",
+      "Match (Stage 3): grocery -> accelerated_10pt (priority 100). ecommerce -> base_2pt only.",
+      "Accrue (Stage 4): grocery ticket=700, floor(700/100)=7*10=70pts/Rs.700 -> rate=0.1 exact.",
+      "  20,000*0.1=2,000 pts/mo. ecommerce ticket=1800, floor(1800/100)=18*2=36pts/Rs.1800 -> rate=0.02",
+      "  exact. 30,000*0.02=600 pts/mo. No rounding_estimated flags.",
+      "Caps (Stage 5): 7,500 pts/month cap, pooled=2,000/mo (grocery only) -> never binds.",
+      "Annual points: grocery 2,000*12=24,000. ecommerce 600*12=7,200. TOTAL=31,200 pts/year.",
+      "Thresholds (Stage 6-7): fee_waiver, pooled waiver spend=600,000>=300,000 -> waived, True.",
+      "Valuation (Stage 8), voucher_catalog ratio=0.1827 (REUSED from base PRIME): 31,200*0.1827=Rs.5,700.24.",
+      "Benefits (Stage 9): both benefits excluded from this scenario -> Rs.0.00.",
+      "Costs (Stage 10): no surcharges, no international spend -> forex=Rs.0.00.",
+      "Fees (Stage 10): waiver_achieved=True -> steady_fee=Rs.0.00. year1_fee=(2999+0)*1.18=Rs.3,538.82.",
+      "NACV steady-state = 5,700.24+0+0-0.00-0.00-0.00 = Rs.5,700.24.",
+      "NACV year1 = 5,700.24+0+0-3,538.82-0.00-0.00 = Rs.2,161.42.",
+      "BYTE-IDENTICAL to base SBI Card PRIME's own golden -- expected and confirmed, not coincidence.",
+      "This completes the batch: all FIVE PRIME-family cards now produce this same NACV, verified",
+      "independently per card, not assumed from the family framing."
+    ],
+    "assumptions": {
+      "primary_route": {"sbi_prime_points": "voucher_catalog"},
+      "benefit_need": {"priority_pass_lounge": 0},
+      "benefit_unit_value": {"priority_pass_lounge": 0},
+      "_note": "benefit_need=0 for priority_pass_lounge is a SCENARIO CHOICE, identical framing to base PRIME's own golden."
+    },
+    "expected": {
+      "_gross_points_earned": 31200,
+      "waiver_achieved": true,
+      "fee_paid": 0.00,
+      "_fee_year1": 3538.82,
+      "gross_reward_value": 5700.24,
+      "nacv_steady_state": 5700.24,
+      "nacv_year_1": 2161.42,
+      "_note": "IDENTICAL to base SBI Card PRIME's own golden -- verified rather than assumed. voucher_catalog ratio REUSED from base PRIME's reference_reward_point_values.json entry, not re-derived for this co-brand."
+    },
+    "tolerance_rupees": 0.01
+  }
+}
