@@ -1,0 +1,168 @@
+{
+  "bundle_id": "sbi_prime_bom_v1",
+  "key": "prime_bom",
+  "name": "Bank of Maharashtra SBI Card PRIME",
+  "issuer_key": "sbi_card",
+  "network": "visa",
+  "effective_from": "2026-01-01",
+  "status": "draft",
+  "_sources": {
+    "reward_terms_prime_ekit": {
+      "source_type": "reward_terms",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/ekit-tncs/prime-and-primepro/PRIMe-TnCekit.pdf",
+      "snapshot_note": "Shared PRIMe e-kit T&C booklet (29pp), byte-identical in its Section 11 (Reward Point Program), Welcome Gift, and Priority Pass terms to the copy already ingested for base SBI Card PRIME (bundle_sbi_prime.json) -- confirmed by direct text comparison, not assumed from the shared URL/page-count alone. Same file also cited by PSB SBI Card PRIME (bundle_sbi_prime_psb.json).",
+      "authoritative_for": ["earning_rules", "exclusions", "benefits"],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/reward_terms_prime_ekit-2026-09-05.pdf",
+      "captured_at": "2026-09-05"
+    },
+    "mitc": {
+      "source_type": "mitc",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/most-important-terms-and-conditions/mitc-english.pdf",
+      "issuer_level": true,
+      "authoritative_for": ["annual_fee", "joining_fee", "renewal_waiver_threshold", "forex_markup"],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/mitc-2026-08-31.pdf",
+      "captured_at": "2026-08-31",
+      "_note": "Issuer-level source already captured for CASHBACK SBI (docs/DECISIONS.md #143-146) -- reused here, not re-fetched. Same URL, same storage object."
+    }
+  },
+  "version": {
+    "joining_fee": 2999,
+    "annual_fee": 2999,
+    "gst_rate": 0.18,
+    "forex_markup": 0.035,
+    "_source": "mitc",
+    "_note": "MITC fee table page 11 (own image render confirmed, not the garbled multi-column text extraction), 'Bank of Maharashtra SBI Card PRIME' row: Annual Fee Rs.2,999, Renewal Fee Rs.2,999 (waived on annual spends of Rs.3 Lakh or more in the preceding year) -- IDENTICAL to base SBI Card PRIME's own row. Forex 3.5%: MITC p.30's exception list names 'Prime NRI secured' specifically, not this co-brand or plain 'SBI Card PRIME' -- falls under the general 3.5%, same as base PRIME. joining_fee modelled equal to annual_fee, same convention as every other SBI Card bundle in this repo (MITC has no separate 'Joining Fee' line item for any card)."
+  },
+  "currency": "sbi_prime_points",
+  "currencies": [
+    {
+      "key": "sbi_prime_points",
+      "routes": [
+        {
+          "key": "statement_credit",
+          "route_type": "statement_credit",
+          "flat_redemption_fee": 99,
+          "_source": "mitc",
+          "_note": "Same unresolved gap as base PRIME's own statement_credit route (docs/DECISIONS.md #150) -- no source states a fixed rupee-per-point ratio, SBI's own FAQ states pricing is at its discretion per card segment. Stays unpriced here for the same reason, not re-litigated per co-brand card. flat_redemption_fee=99 carried over from the same MITC clause (applies to all cards except AURUM/Elite/Prime NRI secured)."
+        },
+        {
+          "key": "voucher_catalog",
+          "route_type": "voucher",
+          "ratio": 0.1827,
+          "flat_redemption_fee": 0,
+          "_source": "reward_terms_prime_ekit",
+          "_note": "REUSED from base SBI Card PRIME's own already-derived ratio (compute/ingestion/reference_reward_point_values.json, segment 'sbi-card-prime', mean=18.2721/100pts, n=100, captured 2026-09-04) -- NOT re-run for this co-brand card. Justification: 'sbi_prime_points' is a SHARED issuer-level currency (Part D's own schema, confirmed via docs/DECISIONS.md #151 -- the redemption_routes row lives on the CURRENCY, not per-card), and the underlying reward catalog a cardholder redeems against is SBI Card's own Shop-and-Smile catalog, identical regardless of which bank co-brands the physical card. Re-deriving this ratio per co-brand card would re-run the exact same catalog query and get the exact same answer -- not a meaningful re-verification, just repeated work. Per Task B's own instruction ('Reuse reference_reward_point_values.json for the point value -- same currency as PRIME')."
+        }
+      ],
+      "_source": "reward_terms_prime_ekit",
+      "_note": "Sec 11.3(a): 'Cardholder shall earn total of 10 Reward Points for every Rs.100 spent...' base clause reads 'BOM SBI Card PRIME Cardholders shall earn 2 Reward Points for every Rs.100 charged to his/her SBI Card PRIME' -- confirmed word-for-word identical structure to base PRIME's own Sec 11.3(a) (only the card name token differs)."
+    }
+  ],
+  "earning_rules": [
+    {
+      "key": "base_2pt",
+      "selector": {},
+      "accrual": {
+        "type": "per_unit",
+        "unit_amount": 100,
+        "points_per_unit": 2,
+        "rounding": "floor_per_txn",
+        "currency": "sbi_prime_points"
+      },
+      "priority": 10,
+      "_source": "reward_terms_prime_ekit",
+      "_note": "Sec 11.3(a): 2 Reward Points per Rs.100 on all otherwise-eligible spend -- confirmed identical wording/rate to base PRIME."
+    },
+    {
+      "key": "accelerated_10pt",
+      "selector": {
+        "categories": ["dining", "departmental_stores", "grocery", "movies"]
+      },
+      "accrual": {
+        "type": "per_unit",
+        "unit_amount": 100,
+        "points_per_unit": 10,
+        "rounding": "floor_per_txn",
+        "currency": "sbi_prime_points"
+      },
+      "caps": ["cap_accelerated_monthly"],
+      "priority": 100,
+      "_source": "reward_terms_prime_ekit",
+      "_note": "Sec 11.3: '10 Reward Points for every Rs.100 spent on Dining/Departmental stores/Grocery/Movies.' MCCs per Sec 11.1(b) table: Dept Stores 5311, Grocery 5411, Dining (5812/5813/5814), Movies 7832 -- confirmed identical to base PRIME's own table."
+    }
+  ],
+  "caps": [
+    {
+      "key": "cap_accelerated_monthly",
+      "measure": "reward",
+      "amount": 7500,
+      "window_def": {"kind": "calendar_month"},
+      "scope": "rule",
+      "overflow": "base_rate",
+      "_source": "reward_terms_prime_ekit",
+      "_note": "Sec 11.3(c): 7,500 Reward Points/calendar month, overflow reverts to base 2pt rate -- confirmed identical to base PRIME. Same multi-category pooled-cap engine gap recurs (docs/DECISIONS.md #11/#32) -- see _review_checklist."
+    }
+  ],
+  "exclusions": [
+    {
+      "key": "fuel_reward_exclusion",
+      "selector": {"categories": ["fuel"]},
+      "excluded_from": ["rewards"],
+      "_source": "reward_terms_prime_ekit",
+      "_note": "Sec 11.3(b): petrol pumps/service stations (MCCs 5172, 5541, 5542, 5983) excluded -- confirmed identical to base PRIME."
+    },
+    {
+      "key": "ewallet_reward_exclusion",
+      "selector": {"categories": ["wallet"]},
+      "excluded_from": ["rewards"],
+      "_source": "reward_terms_prime_ekit",
+      "_note": "Sec 11.3(d): 'e-Wallet Loading Transactions identified under MCCs 6540 and 6541 will not be eligible to accrue reward points with effect from 1st July 2020' -- stated DIRECTLY in this booklet (same 29pp file as base PRIME), unlike UCO/CUB/Karnataka's own banking-ekit booklets which only cross-reference the generic Shop-and-Smile page for this exclusion (see those bundles' own notes)."
+    }
+  ],
+  "thresholds": [
+    {
+      "key": "fee_waiver",
+      "basis": {
+        "measure": "waiver_eligible_spend",
+        "window": {"kind": "anniversary_year"}
+      },
+      "tier_mode": "cumulative",
+      "tiers": [
+        {"tier_index": 1, "threshold_amount": 300000, "payload": {"type": "waive_fee", "fee": "annual"}}
+      ],
+      "_source": "mitc",
+      "_note": "MITC fee table page 11, 'Bank of Maharashtra SBI Card PRIME' row: waived at Rs.3 Lakh annual spend -- identical to base PRIME. This booklet ALSO restates the 'Spends Based Reversal' clause in its own words (same as base PRIME's), without a specific threshold number -- MITC remains the sole source for the actual figure. 'Net Retail Spends' exclusion scope (fuel/cash-advance/EMI?) remains unconfirmed, same open question as base PRIME's checklist item 7 -- modelled as all spend counting."
+    }
+  ],
+  "surcharges": [],
+  "benefits": [
+    {
+      "key": "priority_pass_lounge",
+      "kind": "countable",
+      "unit_label": "international lounge visit",
+      "entitlement": 4,
+      "entitlement_window": {"kind": "anniversary_year"},
+      "_source": "reward_terms_prime_ekit",
+      "_note": "Priority Pass terms rate table: '4 visits* for SBI Card PRIME Cardholder per year', '*Visits are subject to a maximum of 2 per quarter' -- confirmed identical to base PRIME (same 2/quarter sub-cap approximation gap, same posture)."
+    },
+    {
+      "key": "welcome_gift_voucher",
+      "kind": "voucher",
+      "face_value": 3000,
+      "_source": "reward_terms_prime_ekit",
+      "_note": "Welcome Gift T&C: 'vouchers in multiples of Rs.1000, up to a total value of Rs.3000', gated on 'paying the membership fee for the eligible year' -- confirmed identical to base PRIME's own gap (fee-payment-gated, not spend-gated -- no Threshold can grant it)."
+    }
+  ],
+  "_review_checklist": [
+    "1. [Confirmed, not assumed] Reward mechanics verified BYTE-IDENTICAL to base SBI Card PRIME by direct text comparison of this card's own captured booklet (same 29pp shared PRIMe-TnCekit.pdf) against bundle_sbi_prime.json's citations: base 2pt, accelerated 10pt (dining/departmental_stores/grocery/movies, same MCCs), 7,500pt/month accelerated cap, fuel exclusion (same MCCs), e-wallet exclusion (stated directly, same as base PRIME), welcome gift Rs.3,000 (fee-gated), Priority Pass 4/year international (2/quarter sub-cap). NO structural divergence found for this card.",
+    "2. [Confirmed, not assumed] Fees/waiver/forex verified IDENTICAL to base PRIME via the MITC's own fee table (page 11, visually rendered and read directly -- not the garbled multi-column text extraction, which is unreliable for this table's layout): Rs.2,999/Rs.2,999, waived at Rs.3L, forex 3.5% (this co-brand is not on MITC p.30's exception list, which names only 'Prime NRI secured').",
+    "3. [Engine gap, inherited from base PRIME, docs/DECISIONS.md #11/#32] cap_accelerated_monthly pools 4 categories into one cap -- engine.caps.apply_caps raises if >1 of {dining, departmental_stores, grocery, movies} has spend in the same month while the cap needs trimming. Same gap, not re-derived.",
+    "4. [Engine gap, inherited] welcome_gift_voucher (Rs.3,000) cannot be granted by any Threshold -- fee-payment-gated, not spend-gated. Excluded from the proposed golden's NACV, same as base PRIME.",
+    "5. [Engine gap / approximation, inherited] priority_pass_lounge's real cap is '4/year AND max 2/quarter' -- Benefit only supports one flat entitlement/window pair. Modelled as flat 4/year, excluded from the proposed golden entirely (benefit_value=0), same as base PRIME.",
+    "6. [Unmodeled, inherited] Birthday accelerator (20pt/Rs.100, 3-day window, capped 2,000/year) and Standing-Instruction utility-bill accelerator (20pt/Rs.100, capped 3,000/month) -- both confirmed present in THIS card's own booklet too, word-for-word identical to base PRIME's. No selector dimension exists for either. Not in earning_rules[] at all.",
+    "7. [Assumption, inherited] voucher_catalog's ratio=0.1827 REUSED from base PRIME's own already-derived reference_reward_point_values.json entry ('sbi-card-prime' segment) rather than re-run for this co-brand -- see the route's own _note for the justification (shared issuer-level currency, same underlying catalog). Subject to the same refresh_policy as base PRIME's.",
+    "8. [Open question, inherited, unconfirmed] whether 'Net Retail Spends' for the Rs.3,00,000 waiver threshold excludes fuel/cash-advance/EMI -- same unresolved question as base PRIME's own checklist item 7. Modelled as all spend counting."
+  ]
+}
