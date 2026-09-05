@@ -69,6 +69,8 @@ INGESTION_DIR = Path(__file__).resolve().parent.parent / "ingestion"
 CARDS = [
     ("prime_bom", "bundle_sbi_prime_bom.json", "golden_sbi_prime_bom.json"),
     ("prime_psb", "bundle_sbi_prime_psb.json", "golden_sbi_prime_psb.json"),
+    ("prime_uco", "bundle_sbi_prime_uco.json", "golden_sbi_prime_uco.json"),
+    ("prime_cub", "bundle_sbi_prime_cub.json", "golden_sbi_prime_cub.json"),
 ]
 
 

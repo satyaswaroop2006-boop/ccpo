@@ -1,0 +1,151 @@
+{
+  "bundle_id": "sbi_prime_uco_v1",
+  "key": "prime_uco",
+  "name": "UCO Bank SBI Card PRIME",
+  "issuer_key": "sbi_card",
+  "network": "visa",
+  "effective_from": "2026-01-01",
+  "status": "draft",
+  "_sources": {
+    "reward_terms_uco": {
+      "source_type": "reward_terms",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/banking-ekit/banking-tnc-face/UCO%20PRIME%20T&C%20Booklet.pdf",
+      "snapshot_note": "UCO Bank's OWN 'banking-ekit' T&C booklet (51pp) -- a DIFFERENT template/file from the shared 29pp PRIMe-TnCekit.pdf used by base PRIME/BOM/PSB, verified independently (not assumed identical from the family framing). Section 11 (Reward Point Program), Welcome Gift, and Priority Pass terms confirmed to state the SAME rates/caps/MCCs as base PRIME, with one real documentation-structure difference: this booklet's own 11.3(b) states only the fuel MCC exclusion explicitly and defers 'other exclusions' to the generic Shop-and-Smile Rewards Program T&Cs page (https://www.sbicard.com/en/tnc.page) -- that page was fetched and confirmed to independently state the e-wallet MCC 6540/6541 exclusion too (see ewallet_reward_exclusion's own _note). Welcome Gift names a specific voucher partner ('Aditya Birla Fashion Retail') not named in base PRIME's booklet -- a cosmetic difference (same Rs.3,000 value, same fee-payment gating), not a structural one.",
+      "authoritative_for": ["earning_rules", "exclusions", "benefits"],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/reward_terms_uco-2026-09-05.pdf",
+      "captured_at": "2026-09-05"
+    },
+    "mitc": {
+      "source_type": "mitc",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/most-important-terms-and-conditions/mitc-english.pdf",
+      "issuer_level": true,
+      "authoritative_for": ["annual_fee", "joining_fee", "renewal_waiver_threshold", "forex_markup"],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/mitc-2026-08-31.pdf",
+      "captured_at": "2026-08-31",
+      "_note": "Issuer-level source already captured for CASHBACK SBI (docs/DECISIONS.md #143-146) -- reused here, not re-fetched. Same URL, same storage object."
+    }
+  },
+  "version": {
+    "joining_fee": 2999,
+    "annual_fee": 2999,
+    "gst_rate": 0.18,
+    "forex_markup": 0.035,
+    "_source": "mitc",
+    "_note": "MITC fee table page 9 (own image render confirmed, not the garbled multi-column text extraction), 'UCO Bank SBI Card PRIME' row: Annual Fee Rs.2,999, Renewal Fee Rs.2,999 (waived on annual spends of Rs.3 Lakh or more in the preceding year) -- IDENTICAL to base SBI Card PRIME's own row. Forex 3.5%: MITC p.30's exception list names 'Prime NRI secured' specifically, not this co-brand -- falls under the general 3.5%. joining_fee modelled equal to annual_fee, same repo-wide convention. Unlike base PRIME's own booklet, this card's reward_terms has NO 'Spends Based Reversal' narrative section at all -- the Rs.3L figure comes solely from the MITC (not a divergence in the actual fee, just a documentation-structure difference)."
+  },
+  "currency": "sbi_prime_points",
+  "currencies": [
+    {
+      "key": "sbi_prime_points",
+      "routes": [
+        {
+          "key": "statement_credit",
+          "route_type": "statement_credit",
+          "flat_redemption_fee": 99,
+          "_source": "mitc",
+          "_note": "Same unresolved gap as base PRIME's own statement_credit route (docs/DECISIONS.md #150) -- stays unpriced for the same reason."
+        },
+        {
+          "key": "voucher_catalog",
+          "route_type": "voucher",
+          "ratio": 0.1827,
+          "flat_redemption_fee": 0,
+          "_source": "reward_terms_uco",
+          "_note": "REUSED from base SBI Card PRIME's own already-derived ratio (compute/ingestion/reference_reward_point_values.json, segment 'sbi-card-prime', mean=18.2721/100pts, n=100, captured 2026-09-04) -- NOT re-run for this co-brand card. 'sbi_prime_points' is a SHARED issuer-level currency (docs/DECISIONS.md #151) and the underlying redemption catalog is identical regardless of which bank co-brands the card."
+        }
+      ],
+      "_source": "reward_terms_uco",
+      "_note": "Sec 11.3(a): 'UCO Bank SBI Card PRIME Cardholders shall earn 2 Reward Points for every Rs.100 charged to his/her SBI Card PRIME' -- confirmed word-for-word identical structure to base PRIME's own Sec 11.3(a) (only the card name token differs)."
+    }
+  ],
+  "earning_rules": [
+    {
+      "key": "base_2pt",
+      "selector": {},
+      "accrual": {"type": "per_unit", "unit_amount": 100, "points_per_unit": 2, "rounding": "floor_per_txn", "currency": "sbi_prime_points"},
+      "priority": 10,
+      "_source": "reward_terms_uco",
+      "_note": "Sec 11.3(a): 2 Reward Points per Rs.100 -- confirmed identical wording/rate to base PRIME."
+    },
+    {
+      "key": "accelerated_10pt",
+      "selector": {"categories": ["dining", "departmental_stores", "grocery", "movies"]},
+      "accrual": {"type": "per_unit", "unit_amount": 100, "points_per_unit": 10, "rounding": "floor_per_txn", "currency": "sbi_prime_points"},
+      "caps": ["cap_accelerated_monthly"],
+      "priority": 100,
+      "_source": "reward_terms_uco",
+      "_note": "Sec 11.3: 10 Reward Points/Rs.100 on Dining/Departmental stores/Grocery/Movies, same MCCs (5311/5411/5812/5813/5814/7832) as base PRIME -- confirmed identical in this card's own booklet."
+    }
+  ],
+  "caps": [
+    {
+      "key": "cap_accelerated_monthly",
+      "measure": "reward",
+      "amount": 7500,
+      "window_def": {"kind": "calendar_month"},
+      "scope": "rule",
+      "overflow": "base_rate",
+      "_source": "reward_terms_uco",
+      "_note": "Sec 11.3: 7,500 Reward Points/calendar month, overflow reverts to base 2pt rate -- confirmed identical to base PRIME. Same multi-category pooled-cap engine gap recurs (docs/DECISIONS.md #11/#32)."
+    }
+  ],
+  "exclusions": [
+    {
+      "key": "fuel_reward_exclusion",
+      "selector": {"categories": ["fuel"]},
+      "excluded_from": ["rewards"],
+      "_source": "reward_terms_uco",
+      "_note": "Sec 11.3(b): petrol pumps/service stations (MCCs 5172, 5541, 5542, 5983) excluded -- stated DIRECTLY in this booklet, confirmed identical to base PRIME."
+    },
+    {
+      "key": "ewallet_reward_exclusion",
+      "selector": {"categories": ["wallet"]},
+      "excluded_from": ["rewards"],
+      "_source": "reward_terms_uco",
+      "_note": "REAL documentation-structure difference from base PRIME/BOM/PSB, flagged not silently carried over: THIS booklet's own Sec 11.3(b) does NOT state the e-wallet MCC exclusion directly -- it excludes only fuel explicitly, then defers 'other exclusions' to the generic Shop-and-Smile Rewards Program T&Cs (https://www.sbicard.com/en/tnc.page, explicitly named in this booklet's own text). That page was fetched and read: it independently states 'e-Wallet loading transactions identified under MCCs 6540 and 6541 on best effort basis w.e.f 1st July 2020' are excluded -- confirmed present, not fabricated from the family assumption. Modelled here via that cross-referenced source, cited accordingly."
+    }
+  ],
+  "thresholds": [
+    {
+      "key": "fee_waiver",
+      "basis": {"measure": "waiver_eligible_spend", "window": {"kind": "anniversary_year"}},
+      "tier_mode": "cumulative",
+      "tiers": [{"tier_index": 1, "threshold_amount": 300000, "payload": {"type": "waive_fee", "fee": "annual"}}],
+      "_source": "mitc",
+      "_note": "MITC fee table page 9, 'UCO Bank SBI Card PRIME' row: waived at Rs.3 Lakh annual spend -- identical to base PRIME. Unlike base PRIME/BOM/PSB, this card's own reward_terms has no supplementary 'Spends Based Reversal' narrative at all -- MITC is the sole source here. 'Net Retail Spends' exclusion scope remains unconfirmed either way -- modelled as all spend counting."
+    }
+  ],
+  "surcharges": [],
+  "benefits": [
+    {
+      "key": "priority_pass_lounge",
+      "kind": "countable",
+      "unit_label": "international lounge visit",
+      "entitlement": 4,
+      "entitlement_window": {"kind": "anniversary_year"},
+      "_source": "reward_terms_uco",
+      "_note": "Priority Pass terms rate table: '4 visits* for SBI Card PRIME Cardholder per year', max 2/quarter -- confirmed identical to base PRIME in this card's own booklet."
+    },
+    {
+      "key": "welcome_gift_voucher",
+      "kind": "voucher",
+      "face_value": 3000,
+      "_source": "reward_terms_uco",
+      "_note": "Welcome Gift T&C: 'Electronic Gift Voucher (EGV) Options worth Rs.3000 as Welcome Gift: Aditya Birla Fashion Retail...' -- same Rs.3,000 value and fee-payment gating as base PRIME, just naming a specific voucher partner this booklet's own text calls out (cosmetic, not a value/structural difference). Same engine gap: fee-gated, not spend-gated, no Threshold can grant it."
+    }
+  ],
+  "_review_checklist": [
+    "1. [Confirmed, not assumed] Reward RATES/MCCs/caps verified IDENTICAL to base PRIME by direct text comparison of THIS card's own distinct 51pp banking-ekit booklet (not the shared 29pp file BOM/PSB use) -- independently checked, not inferred from the page-count match across UCO/CUB/Karnataka.",
+    "2. [Real, flagged, not silently carried over] Documentation-structure difference: this booklet states the e-wallet exclusion by cross-reference to the generic Shop-and-Smile page rather than in-document. Confirmed present on that page (fetched and read) before modelling it here -- not fabricated from the family assumption. Immaterial to the numbers (same MCCs, same effect), material to the citation trail.",
+    "3. [Confirmed, not assumed] Fees/waiver/forex verified IDENTICAL to base PRIME via the MITC's own fee table (page 9, visually rendered): Rs.2,999/Rs.2,999, waived at Rs.3L, forex 3.5%.",
+    "4. [Documentation-structure note] Unlike base PRIME/BOM/PSB, this card's own reward_terms has no 'Spends Based Reversal' section at all -- MITC is the sole source for the waiver threshold here. Does not change the modelled number (still Rs.3L either way).",
+    "5. [Engine gap, inherited] cap_accelerated_monthly pools 4 categories -- multi-category pooled-cap gap (docs/DECISIONS.md #11/#32) recurs.",
+    "6. [Engine gap, inherited] welcome_gift_voucher cannot be granted by any Threshold -- fee-payment-gated. Excluded from the proposed golden's NACV.",
+    "7. [Engine gap / approximation, inherited] priority_pass_lounge's real '2/quarter' sub-cap has no representation -- modelled as flat 4/year, excluded from the golden entirely.",
+    "8. [Unmodeled, inherited] Birthday accelerator and Standing-Instruction utility-bill accelerator both present in this card's own booklet too, word-for-word identical to base PRIME's. No selector dimension exists for either.",
+    "9. [Assumption, inherited] voucher_catalog's ratio=0.1827 REUSED from base PRIME's own reference_reward_point_values.json entry rather than re-run.",
+    "10. [Open question, inherited, unconfirmed] whether 'Net Retail Spends' for the waiver threshold excludes fuel/cash-advance/EMI."
+  ]
+}
