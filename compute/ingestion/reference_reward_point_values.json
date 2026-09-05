@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-09-03",
+  "captured_at": "2026-09-04",
   "source_url": "https://www.sbicard.com/en/personal/rewards.page",
   "total_catalog_items_parsed": 442,
   "methodology": "For each card_key, filters catalog items whose 'card' eligibility field includes it AND whose itemName states an explicit INR/Rs face value (gift cards/vouchers only, not physical products without a stated value). Computes (face_value / points) * 100 per item, then median/mean/min/max across that card's own slice. This is a DISTRIBUTION summary, not one fixed fact -- per-item pricing genuinely varies within one card's own catalog (SBI's own stated discretion). An assumption-registry default requiring sign-off before use, not a citable T&C fact.",

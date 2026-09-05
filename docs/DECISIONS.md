@@ -5083,3 +5083,188 @@ Not done, deliberately: `ingest link`/`publish` not run -- same bar as
 every prior real-card ingestion, pending Satya's independent
 confirmation of the golden's numbers and the 11-item `_review_checklist`
 against source.
+
+### 155. SBI Card ELITE drafted through CAPTURE/DRAFT/LINT -- fourth real
+card, first multi-tier cumulative milestone, weakest sourcing of the four
+
+Source discovery was genuinely hard this time -- worth logging as its
+own finding, not just the card's own facts. The product page (sbicard.
+com/en/personal/credit-cards/sbi-card-elite.html) is JS-rendered with no
+static T&C link; its own underlying data feed
+(`/templatedata/product/card/data/en/personal/sbi-card-elite.json`)
+404'd under every base-path variant tried; the site's generic `tnc.page`
+had no Elite-specific link either; and roughly a dozen direct URL
+guesses against plausible `ekit-tncs`/`tnc` path patterns all 404'd.
+WebSearch surfaced only co-brand variants (IndiGo Elite, PSB/UCO/KVB
+Elite, Miles Elite, Elite Business) -- never the plain standalone card.
+Switched to the `mcp__Claude_Browser` tools to render the live page and
+inspect it directly (confirmed real marketing content: accelerator
+rates, milestone figures, a redemption bullet) -- still no T&C link
+found there either. Satya supplied the URL directly (`.../lifestyle/
+sbi-card-elite/elite-terms-and-conditions-2016.pdf`) after watching this
+play out; used as-is per Part I -- a URL supplied directly by Satya is
+exactly as citable as one Claude finds unassisted, the source itself
+still gets fetched, captured, and read in full before anything is drafted
+from it, same as every other bundle.
+
+**A "2016" filename is a real, unresolved flag, not cosmetic.** Two
+concrete signals the document may be stale relative to current policy:
+(a) no wallet (MCC 6540/6541) or rent (MCC 6513) reward exclusion
+anywhere, unlike PRIME's/OCTANE's own contemporary bundles, both of
+which cite *dated* policy changes ("W.e.f. 1st July 2020", "W.e.f. 15
+Apr 2024") a 2016-era document simply predates; (b) the MITC's own
+per-card fee table (confirmed via a systematic scan of all 57 pages) has
+no row for plain "SBI Card Elite" at all -- only a bank-partnership
+variant ("KVB SBI Card ELITE") and a repeated forex-exception clause.
+Fees (`joining_fee=annual_fee=4999`, waived at Rs.10L) were sourced from
+the card's own live product page FAQ instead, cross-checked against the
+KVB variant's identical MITC row as independent corroboration -- not
+guessed, but also not from the primary reward_terms document. Content
+elsewhere in the PDF (AURUM upgrade-path references, Flexipay/Merchant
+EMI clauses) reads as reasonably current despite the filename, so this
+wasn't treated as disqualifying -- flagged prominently instead
+(checklist item 1) for Satya to resolve, same "flag, don't silently
+pick" posture as every genuine ambiguity in this repo.
+
+**A second, more consequential discrepancy, also flagged rather than
+resolved**: the live product page shows "Pay your outstanding card bill
+using Reward Points. 4 Reward Points = Re.1" -- a direct statement-
+credit route at ratio=0.25, matching OCTANE's own issuer-stated
+mechanism exactly. This figure is nowhere in the captured reward_terms
+PDF (which defers redemption entirely to the generic Shop-n-Smile
+catalog, same absence already resolved for PRIME/OCTANE via `reward-
+catalog-ratio`). NOT added as a bundle route without a citable primary-
+source statement for it -- this bundle prices only through the weaker,
+empirically-derived `shop_n_smile_catalog` route (ratio=0.1882, n=108).
+If Satya confirms the statement-credit figure is real and current, it
+would likely become the golden's own priced route instead and would
+raise the proposed NACV materially (0.25 vs 0.1882 is a ~33% difference
+on both the reward and milestone lines).
+
+**A genuinely new construct, cleanly supported, no gap**: `Bonus Reward
+Points` -- a real 4-tier CUMULATIVE `grant_points` milestone (Rs.3L/4L/
+5L/8L annual spend -> 10,000/10,000/15,000/15,000 points), the first
+real card in this repo's own ingestion history to exercise Stage 6-7's
+multi-tier grant_points machinery end to end (PRIME/CASHBACK/OCTANE's
+own thresholds were all single-tier `waive_fee`). Cross-checked twice:
+against the live page's own bullets (exact match, tier by tier) and
+arithmetically (50,000 total points at the live page's own implied
+0.25 ratio = Rs.12,500, matching that page's own stated rupee figure
+independently of this bundle's own 0.1882 ratio).
+
+**Which of PRIME's four gaps recur** -- the first time any gap has been
+tested TWICE against a card that actually has the underlying feature
+(OCTANE simply didn't have gaps #2/#3's features at all, which answered
+"does not apply", not "does not recur"):
+- #1 (multi-category pooled cap): RECURS, third real card in a row
+  (`cap_accelerated_monthly` pools dining/departmental_stores/grocery --
+  note, no "movies" this time; ELITE's own accelerator is narrower than
+  PRIME's/OCTANE's, a real product difference, not an omission).
+- #2 (fee-triggered voucher grant, `welcome_gift_voucher`): RECURS --
+  same shape as PRIME's identical benefit (Rs.5,000 here vs PRIME's
+  Rs.3,000), confirms this is a real, repeatable engine gap, not a
+  one-off.
+- #3 (two-tier benefit cap, `priority_pass_lounge`): RECURS -- same
+  "N/year AND max 2/quarter" shape as PRIME's identical benefit (6/year
+  here vs PRIME's 4/year).
+- #4 (every-route-must-be-priced): does not recur -- ELITE's currency
+  has exactly one declared route, and it's priced.
+- OCTANE's own new gap (no selector-negation primitive): does not recur
+  -- ELITE's fuel exclusion is a plain `eligibility.py` Exclusion, since
+  there's no competing fuel-earning rule here that needs to see fuel
+  spend the enumeration workaround exists for.
+
+**A real tool footgun found and fixed on the spot**: `ingest reward-
+catalog-ratio --out <path>` OVERWRITES the whole reference file rather
+than merging -- running it with only `--card sbi-card-elite` briefly
+destroyed the other 9 tracked segments from PRIME's own session before
+being caught (checked the file's own contents immediately after) and
+re-run with the full 10-card list, confirmed byte-identical to before
+(no drift). Not fixed at the tool level in this pass (logged as
+checklist item 10 instead) -- a merge-not-overwrite behaviour is the
+obvious fix, deferred to keep this ingestion's own scope contained.
+
+**Proposed golden**: Rs.25,000/month grocery (accelerated) +
+Rs.62,500/month domestic ecommerce + Rs.5,000/month international
+ecommerce (deliberately included to exercise ELITE's own reduced 1.99%
+forex rate concretely, rather than leaving forex at a trivial Rs.0).
+46,200 gross points/year, all four milestone tiers fire (total spend
+Rs.11,10,000 clears every threshold including the Rs.10L fee waiver),
+50,000 milestone points, forex cost Rs.1,408.92, NACV steady-state =
+Rs.16,695.92, NACV year-1 = Rs.10,797.10. PROPOSED, not validated --
+explicitly weaker provenance than any prior real card (estimated route
+ratio, an unresolved document-currency question, and an unresolved
+statement-credit-route question) -- `golden_sbi_elite.json`'s own
+`_hand_computation` says so more emphatically than PRIME's or OCTANE's
+own equivalent openings. `ingest lint` passes cleanly.
+
+### Verification
+
+`tests/test_golden_sbi_elite.py` (8 tests): bundle loads correctly;
+the single route is genuinely priced (gap #4 confirmed absent); fuel is
+correctly excluded via the simpler eligibility-exclusion mechanism (a
+real bug caught IN THIS TEST FILE ITSELF while writing it -- forgot to
+pass `category_mcc_map` to `apply_eligibility`, which silently no-ops
+every `mcc_include` exclusion; caught because the assertion failed
+loudly rather than passing on a false premise, fixed before trusting
+any of this file's results); the welcome-gift gap and the multi-category
+cap gap both recur (the cap test also needed a real fix -- initial spend
+tied the cap exactly rather than exceeding it, so the trim-needed guard
+never fired; corrected to spend genuinely over the limit); all four
+milestone tiers fire cumulatively at high spend; the reduced 1.99% forex
+rate computes correctly; and the full `evaluate_card` orchestrator
+matches the golden's own hand computation exactly. Full suite: 412/412
+green + 1 skipped (404 prior + 8 new).
+
+Not done, deliberately: `ingest link`/`publish` not run -- same bar as
+every prior real-card ingestion, and a STRICTER one this time given the
+two open sourcing questions (checklist items 1-2) neither of which
+existed for CASHBACK/PRIME/OCTANE.
+
+### 156. SBI Card ELITE linked and published -- fourth real card live;
+both open sourcing questions resolved by Satya, not silently picked
+
+Satya reviewed the two open questions from #155 and gave explicit
+resolutions for both, rather than either being silently decided:
+
+**Checklist item 1 (document currency)**: accepted the 2016-filenamed
+`reward_terms` PDF as the single official source of truth. Rationale
+(Satya's own): no second `reward_terms` link exists anywhere on the
+official site to cross-check against, and any misrepresentation there
+is SBI Cards' own liability, not something this ingestion should
+second-guess by refusing to trust the issuer's own published document.
+
+**Checklist item 2 (statement-credit route)**: confirmed the live
+page's "4 Reward Points = Re.1" mechanism is real -- it lets points be
+redeemed directly against the card's own outstanding bill, a genuinely
+better rate (ratio=0.25) than the catalog route this bundle prices
+(ratio=0.1882, ~+33% if used instead). Deliberately NOT added to the
+bundle: it is not stated anywhere in the MITC or the card's own T&C, so
+there is still no citable primary source for it, Satya's own
+confirmation notwithstanding -- Part I's "never fill from memory, never
+source from a live marketing page alone" discipline applies to
+confirmed-real facts too, not only disputed ones. `golden_sbi_elite.json`
+was updated to record both resolutions in its own `_hand_computation`
+and `expected._note` (superseding the "PROPOSED, NOT YET INDEPENDENTLY
+VERIFIED" language from #155) rather than silently dropping the
+disclaimer.
+
+**Pipeline run**: `ingest link` succeeded on the first attempt
+(`card_id=067c9a02-b83e-4d0c-937c-5474c73f63e2`,
+`card_version_id=6456edee-aaa3-4022-8c74-c41d2651e6b7`, `version_no=1`)
+-- 11 `source_links` inserted, all `reviewer_status='unreviewed'`.
+`ingest publish` correctly REFUSED on the first attempt (SS I.5's own
+gate: all 11 links still unreviewed) -- Satya flipped them to
+`approved` directly in Supabase (per SS I.5, a human step this tool
+deliberately can't perform), and the second `publish` attempt PASSED
+the golden gate (`scenario_A_grocery_ecommerce_milestones` matched
+`evaluate_card`'s output exactly) and published. Verified live via a
+direct query against `current_card_versions`:
+`status='published'`, `published_at` set, `effective_to=NULL`.
+
+### Verification
+
+Re-ran the full suite after the golden-file text update (no expected
+values changed, only the disclaimer language) -- still 412/412 green +
+1 skipped. No new engine or test code this entry; purely a pipeline
+run plus a documentation update reflecting Satya's resolutions.

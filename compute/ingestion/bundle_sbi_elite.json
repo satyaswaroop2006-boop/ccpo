@@ -1,0 +1,207 @@
+{
+  "bundle_id": "sbi_elite_v1",
+  "key": "sbi_card_elite",
+  "name": "SBI Card ELITE",
+  "issuer_key": "sbi_card",
+  "network": "visa",
+  "effective_from": "2026-01-01",
+  "status": "draft",
+  "_sources": {
+    "reward_terms": {
+      "source_type": "reward_terms",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/personal/credit-cards/lifestyle/sbi-card-elite/elite-terms-and-conditions-2016.pdf",
+      "snapshot_note": "SBI Card ELITE T&C -- reward points, milestones, lounge access. URL supplied directly by Satya after automated discovery attempts (site-search, JS-rendered product page inspection, direct URL guessing) failed to locate it. Section 11 (Reward Point Program) + the 'Bonus Reward Points'/'Welcome Gift'/'Priority Pass' sections are the ingested reward source. FLAGGED: filename says '2016' -- see _review_checklist item 1 for why this matters and what was cross-checked.",
+      "storage_path": "sources/sbi_card/reward_terms-2026-09-04.pdf",
+      "captured_at": "2026-09-04",
+      "reviewer_status": "unreviewed"
+    },
+    "mitc": {
+      "source_type": "mitc",
+      "url": "https://www.sbicard.com/sbi-card-en/assets/docs/pdf/most-important-terms-and-conditions/mitc-english.pdf",
+      "issuer_level": true,
+      "authoritative_for": [
+        "annual_fee",
+        "joining_fee",
+        "renewal_waiver_threshold",
+        "forex_markup"
+      ],
+      "reviewer_status": "unreviewed",
+      "storage_path": "sources/sbi_card/mitc-2026-08-31.pdf",
+      "captured_at": "2026-08-31",
+      "_note": "Issuer-level source already captured for CASHBACK/PRIME/OCTANE (docs/DECISIONS.md #143-146) -- reused here, not re-fetched. Same URL, same storage object. NOTE: unlike the other three cards, the MITC's own per-card-name fee table does NOT list a plain 'SBI Card Elite' row anywhere (confirmed via systematic search across all 57 pages) -- only a bank-partnership variant ('KVB SBI Card ELITE', Rs.4,999/Rs.4,999, waived @ Rs.10L) and a repeated forex-exception clause naming 'Elite'. joining_fee/annual_fee below are sourced from the card's own live product page FAQ instead (see version._note), cross-checked against the KVB variant's identical numbers as corroboration."
+    }
+  },
+  "version": {
+    "joining_fee": 4999,
+    "annual_fee": 4999,
+    "gst_rate": 0.18,
+    "forex_markup": 0.0199,
+    "_source": "mitc",
+    "_note": "joining_fee/annual_fee=4999 and the Rs.10,00,000 waiver threshold: NOT found in the MITC's own per-card fee table for the plain 'SBI Card Elite' (see mitc source _note) -- sourced instead from the card's own live product page FAQ (sbicard.com/en/personal/credit-cards/sbi-card-elite.html, rendered and read directly, not a third-party site): 'What is Annual Fee and Renewal Fee of the card? ... The Annual Fee of the card is Rs.4,999 + taxes. The Renewal Fee is Rs.4,999 + taxes from second year' + 'Spend based reversal of Annual Fee on spends of Rs.10 lakhs.' Cross-checked against the MITC's own 'KVB SBI Card ELITE' row (a bank-partnership variant of the same product): Rs.4,999/Rs.4,999, waived at Rs.10 Lakh -- identical numbers, independent corroboration. forex_markup=0.0199 (1.99%) IS from the MITC directly, verbatim: 'Dynamic Currency Conversion Fee: 3.5% (For All Cards Except Aurum, Elite, Prime NRI Secured, Tata Neu Infinity SBI Credit Card and SBI Card Miles Elite/Miles Prime/Miles). 3% for SBI Card Miles, 2.5% for SBI Card Miles Prime & 1.99% (For AURUM, Elite, Prime NRI Secured, Tata Neu Infinity SBI Credit Card & SBI Card Miles Elite).' ELITE is explicitly named in the REDUCED-rate exception list -- 1.99%, not the standard 3.5%, and NOT zero either (a real, distinguishing fact about this card worth getting exactly right, not approximated as 'exempt')."
+  },
+  "currency": "sbi_elite_points",
+  "currencies": [
+    {
+      "key": "sbi_elite_points",
+      "routes": [
+        {
+          "key": "shop_n_smile_catalog",
+          "route_type": "voucher",
+          "ratio": 0.1882,
+          "flat_redemption_fee": 0,
+          "_source": "reward_terms",
+          "_note": "ASSUMPTION-REGISTRY DEFAULT, ESTIMATED-NOT-ISSUER-STATED -- Sec 11.4 defers redemption mechanics entirely to https://www.sbicard.com/en/tnc.page's Shop-and-Smile Rewards Program, same genuine absence already confirmed for PRIME/OCTANE. `python -m ingest reward-catalog-ratio --card sbi-card-elite` (2026-09-04): n=108, median=17.8571/100pts, mean=18.8248/100pts. ratio=0.1882 is that mean. flat_redemption_fee=0, same e-voucher/'not sent physically' reasoning as PRIME/OCTANE (MITC's Rs.99 fee names 'Physical products, Statement Credit & on Vouchers that are sent physically' -- this catalog's underlying items are electronically-delivered e-vouchers). SEE _review_checklist item 2: the live product page ALSO shows 'Pay your outstanding card bill using Reward Points. 4 Reward Points = Re.1' -- a DIRECT statement-credit route at ratio=0.25, matching OCTANE's own issuer-stated redemption exactly -- but this figure appears NOWHERE in the captured reward_terms PDF. NOT added as a second route here without a citable source for it; flagged instead, same discipline as PRIME's own unresolved statement_credit gap."
+        }
+      ],
+      "_source": "reward_terms",
+      "_note": "Points-based currency, same general shape as PRIME/OCTANE's own -- Sec 11.3(a): 'SBI Card ELITE Cardholders shall earn 2 Reward Points for every `100 charged.' Card-specific key (sbi_elite_points), not shared with PRIME/OCTANE, matching this repo's own established precedent (each card gets its own currency key even where the underlying Shop-n-Smile mechanics look similar) -- also consistent with OCTANE's own T&C stating points 'cannot be combined... with Points of his/her other [card]', i.e. strict card-level pools, not a shared cross-product currency."
+    }
+  ],
+  "earning_rules": [
+    {
+      "key": "accelerated_10pt",
+      "selector": {
+        "categories": ["dining", "departmental_stores", "grocery"]
+      },
+      "accrual": {
+        "type": "per_unit",
+        "unit_amount": 100,
+        "points_per_unit": 10,
+        "rounding": "floor_per_txn",
+        "currency": "sbi_elite_points"
+      },
+      "caps": ["cap_accelerated_monthly"],
+      "priority": 90,
+      "_source": "reward_terms",
+      "_note": "Sec 11.3(a): 'Cardholder shall earn total of 10 Reward Points for every `100 spent on the following categories: - 1. Dining 2. Departmental stores & grocery.' Only THREE category-strings, no 'movies' -- confirmed by Sec 11.1(b)'s own MCC table too (Departmental Stores 5311, Groceries 5411, Dining 5812/5813/5814 -- no Movies MCC listed at all, unlike PRIME/OCTANE's own accelerator). A genuinely narrower accelerator than the other two real cards, not an omission."
+    },
+    {
+      "key": "base_2pt",
+      "selector": {},
+      "accrual": {
+        "type": "per_unit",
+        "unit_amount": 100,
+        "points_per_unit": 2,
+        "rounding": "floor_per_txn",
+        "currency": "sbi_elite_points"
+      },
+      "priority": 10,
+      "_source": "reward_terms",
+      "_note": "Sec 11.3(a): 'SBI Card ELITE Cardholders shall earn 2 Reward Points for every `100 charged to his/her SBI Card ELITE.' Unlike OCTANE, fuel is kept out of this rule via a plain eligibility.py exclusion (fuel_exclusion below), not a selector-enumeration workaround -- ELITE has no competing fuel-specific earning rule that needs to 'see' fuel spend the way OCTANE's bpcl_fuel_25x did, so the simpler CASHBACK/PRIME-style exclusion is sufficient and correct here."
+    }
+  ],
+  "caps": [
+    {
+      "key": "cap_accelerated_monthly",
+      "measure": "reward",
+      "amount": 10000,
+      "window_def": {
+        "kind": "calendar_month"
+      },
+      "scope": "rule",
+      "overflow": "base_rate",
+      "_source": "reward_terms",
+      "_note": "Sec 11.3(b): 'Reward Points on accelerated categories ... will be subject to a capping of 10,000 Reward Points per calendar month. After reaching this monthly cap, the cardholder will accrue 2 Reward Points per Rs.100 on eligible transactions done in accelerated categories.' overflow=base_rate EXPLICITLY stated this time (not inferred, unlike OCTANE's equivalent cap). RECURRING ENGINE GAP, same as PRIME/OCTANE's own gap #1 (docs/DECISIONS.md #11/#32): this cap pools THREE categories (dining/departmental_stores/grocery) into one combined monthly limit -- engine.caps.apply_caps raises if more than one has spend in the same calendar month while the cap needs trimming. Third real card in a row to hit this identical structural gap. The proposed golden avoids it (grocery-only among the three)."
+    }
+  ],
+  "exclusions": [
+    {
+      "key": "fuel_exclusion",
+      "selector": {
+        "mcc_include": [5172, 5541, 5542, 5983]
+      },
+      "excluded_from": ["rewards"],
+      "_source": "reward_terms",
+      "_note": "Sec 11.3(b): 'any purchases at petrol pumps/ service stations (MCCs excluded-5172, 5541, 5542, 5983).' Same four MCCs as CASHBACK's own fuel exclusion. NO wallet (MCC 6540/6541) or rent (MCC 6513) exclusion found anywhere in this document, unlike PRIME/OCTANE's own bundles which both have one -- see _review_checklist item 1 for why this may reflect the source document's own age rather than a genuine difference in card policy."
+    }
+  ],
+  "thresholds": [
+    {
+      "key": "fee_waiver",
+      "basis": {
+        "measure": "waiver_eligible_spend",
+        "window": {
+          "kind": "anniversary_year"
+        }
+      },
+      "tier_mode": "cumulative",
+      "tiers": [
+        {
+          "tier_index": 1,
+          "threshold_amount": 1000000,
+          "payload": {
+            "type": "waive_fee",
+            "fee": "annual"
+          }
+        }
+      ],
+      "_source": "reward_terms",
+      "_note": "Live product page FAQ: 'Spend based reversal of Annual Fee on spends of Rs.10 lakhs' -- cross-checked against the MITC's own KVB-Elite variant row (waived at 'Rs.10 lakh or more'), same reasoning as version._note above. A materially higher threshold than PRIME (Rs.3L) or OCTANE/CASHBACK (Rs.2L), consistent with ELITE being a higher annual-fee, higher-tier product."
+    },
+    {
+      "key": "milestone_bonus_points",
+      "basis": {
+        "measure": "milestone_eligible_spend",
+        "window": {
+          "kind": "anniversary_year"
+        }
+      },
+      "tier_mode": "cumulative",
+      "tiers": [
+        {
+          "tier_index": 1,
+          "threshold_amount": 300000,
+          "payload": {"type": "grant_points", "amount": 10000, "currency": "sbi_elite_points"}
+        },
+        {
+          "tier_index": 2,
+          "threshold_amount": 400000,
+          "payload": {"type": "grant_points", "amount": 10000, "currency": "sbi_elite_points"}
+        },
+        {
+          "tier_index": 3,
+          "threshold_amount": 500000,
+          "payload": {"type": "grant_points", "amount": 15000, "currency": "sbi_elite_points"}
+        },
+        {
+          "tier_index": 4,
+          "threshold_amount": 800000,
+          "payload": {"type": "grant_points", "amount": 15000, "currency": "sbi_elite_points"}
+        }
+      ],
+      "_source": "reward_terms",
+      "_note": "'Bonus Reward Points' section, verbatim table: 'Annual Spend Level | Bonus Reward Points -- 3 Lakh: 10,000; 4 Lakh: 10,000; 5 Lakh: 15,000; 8 Lakh: 15,000.' FOUR SEPARATE cumulative tiers (crossing all four in one year nets 10,000+10,000+15,000+15,000=50,000 points), each independently confirmed against the live product page's own bullets ('10,000 Bonus Reward Points on annual spends of Rs.3 lakhs and 4 lakhs', '15,000 Bonus Reward Points on annual spends of Rs.5 lakhs and 8 lakhs', 'Up to 50,000 Bonus Reward Points worth Rs.12,500 every year') -- exact arithmetic match (50,000 * ratio 0.25 [the live page's own implied rate] = Rs.12,500, matching the page's own stated rupee figure too, independent of this bundle's own empirically-derived 0.1882 ratio). tier_mode=cumulative, basis.measure=milestone_eligible_spend (distinct from fee_waiver's waiver_eligible_spend) -- Part C's own vocabulary already draws this exact distinction, no gap. FIRST real card in this repo's own ingestion history to exercise a genuine multi-tier grant_points milestone end to end (PRIME/CASHBACK/OCTANE's own thresholds were all single-tier waive_fee)."
+    }
+  ],
+  "surcharges": [],
+  "benefits": [
+    {
+      "key": "welcome_gift_voucher",
+      "kind": "voucher",
+      "face_value": 5000,
+      "_source": "reward_terms",
+      "_note": "Welcome Gift T&C: 'All eligible SBI Card ELITE cardholders can choose vouchers in multiples of Rs.1000, up to a total value of Rs.5000, from a range of brand options.' Same structural gap as PRIME's own identical benefit (item 4 threshold_amount=Rs.5000 vs PRIME's Rs.3000) -- see _review_checklist item 3."
+    },
+    {
+      "key": "priority_pass_lounge",
+      "kind": "countable",
+      "unit_label": "international lounge visit",
+      "entitlement": 6,
+      "entitlement_window": {"kind": "anniversary_year"},
+      "_source": "reward_terms",
+      "_note": "Priority Pass T&C: '6 visits* for SBI Card ELITE Cardholder per year ... *Visits are subject to a maximum of 2 per quarter.' International lounges only (Priority Pass network outside India) -- no domestic complimentary visits. Modelled as flat 6/year -- same two-tier-cap approximation gap as PRIME's own identical benefit (item 4)."
+    }
+  ],
+  "_review_checklist": [
+    "1. [Needs Satya's read -- document-currency concern] The captured reward_terms PDF's own filename says '2016'. Two concrete signals this document may be stale relative to CURRENT card policy: (a) no wallet (MCC 6540/6541) or rent (MCC 6513) reward exclusion anywhere, unlike PRIME/OCTANE's own contemporary bundles, which both cite dated policy changes ('W.e.f 1st July 2020', 'W.e.f. 15 Apr 2024') a 2016-era document simply predates; (b) the MITC's own per-card fee table has no row for plain 'SBI Card Elite' at all (fees were sourced from the live product page instead, cross-checked against a bank-partnership variant's identical row -- see version._note). Content elsewhere (AURUM upgrade path references, Flexipay/Merchant EMI clauses) reads as reasonably current despite the filename. Not silently resolved either way -- recommend confirming whether a more current ELITE-specific T&C document exists before this bundle is ever linked/published.",
+    "2. [Real discrepancy, flagged not resolved] The live product page (sbicard.com/en/personal/credit-cards/sbi-card-elite.html, rendered directly) shows 'Pay your outstanding card bill using Reward Points. 4 Reward Points = Re.1' -- a DIRECT statement-credit redemption at ratio=0.25, matching OCTANE's own issuer-stated mechanism exactly. This figure appears NOWHERE in the captured reward_terms PDF (which defers redemption entirely to the generic Shop-n-Smile catalog). NOT added as a bundle route without a citable primary-source statement for it -- this bundle prices only via the empirically-derived shop_n_smile_catalog route (ratio=0.1882, lower value). If Satya confirms this statement-credit option is real and current, it should be added as a second, better-value route (same shape as OCTANE's own two-route currency) -- this would likely become the golden's own priced route instead, materially changing the proposed NACV upward.",
+    "3. [Same gap as PRIME, confirmed recurring a second time] welcome_gift_voucher is gated on fee PAYMENT, not spend -- no ThresholdBasis.measure exists for that, so no threshold in this bundle grants it. Reports 0/not_granted honestly, same as PRIME's own identical benefit.",
+    "4. [Same gap as PRIME, confirmed recurring a second time] priority_pass_lounge's real cap is '6/year AND max 2/quarter'; Benefit only supports one flat entitlement/window pair. Modelled as flat 6/year (can overstate in an edge-case usage pattern). Excluded from the proposed golden's own NACV (benefit_need=0 assumption, same technique OCTANE/PRIME's own golden tests use), same posture as PRIME's identical benefit.",
+    "5. [RECURRING ENGINE GAP, third real card in a row] cap_accelerated_monthly pools THREE categories (dining/departmental_stores/grocery) into one cap -- engine.caps.apply_caps's multi-category guard (#11/#32) fires identically to PRIME's and OCTANE's own accelerator caps. Golden avoids it (grocery-only).",
+    "6. [NOT re-hit] OCTANE's own new gap (no selector-negation primitive) doesn't recur here -- ELITE's fuel exclusion is a plain eligibility.py Exclusion (no competing fuel earning-rule needs to bypass it), the simpler CASHBACK/PRIME-style mechanism.",
+    "7. [RedemptionFees(c) -- not re-hit, already closed] MITC's Rs.99 fee reads as exempt for shop_n_smile_catalog (e-vouchers, not 'sent physically'), same reasoning and same engine.costs.redemption_fees_cost machinery as PRIME/OCTANE.",
+    "8. Movies MCC / accelerated-category scope narrower than PRIME/OCTANE (dining+departmental_stores+grocery only, no movies) -- a real, sourced difference between products, not a gap. See accelerated_10pt's own _note.",
+    "9. Forex 1.99% (not the standard 3.5%, and not zero either) -- see version._note for the exact MITC clause. A genuinely distinguishing fact about this card worth getting precisely right.",
+    "10. reference_reward_point_values.json gotcha found while deriving this card's ratio: `ingest reward-catalog-ratio --out <path>` OVERWRITES the whole file rather than merging -- an early run with only `--card sbi-card-elite` briefly destroyed the other 9 tracked segments from PRIME's own session before being caught and re-run with the full card list. Worth a small tool fix (merge-not-overwrite) so this can't happen again; not fixed in this pass to keep this ingestion's own scope contained."
+  ]
+}
