@@ -5381,3 +5381,80 @@ gap recurs identically for every card; `welcome_gift_voucher` reports
 orchestrator matches each card's own golden AND base PRIME's own NACV
 numbers exactly, for every card. Full suite: 437/437 green + 1 skipped
 (412 prior + 25 new).
+
+### 158. Found and fixed 3 corrupted `source_links.source_id` values
+BEFORE publishing -- 2 of the 3 were already `approved`, meaning
+`ingest publish`'s own gate would not have caught them
+
+Satya said "Approved, run ingest publish" for all 5 PRIME-family cards.
+Before running it, cross-checked every entity's actual DB `source_link`
+against what its own bundle file declares (not just trusting
+`reviewer_status`) -- a check the publish gate itself does NOT do (SS
+I.8's gate only verifies `reviewer_status='approved'`, never that the
+`source_id` a link points to is the one the bundle's own `_source`
+field actually names).
+
+**Found 3 mismatches out of 45 links**, each entity's `source_link`
+silently pointing at a DIFFERENT card's document than its own bundle
+declares:
+  - `prime_psb` earning_rule `accelerated_10pt`: should cite the
+    shared `PRIMe-TnCekit.pdf`, actually cited **Karnataka Bank's**
+    booklet. Status: unreviewed (never approved, so this one alone
+    would have been caught by the gate).
+  - `prime_cub` benefit `priority_pass_lounge`: should cite City Union
+    Bank's own booklet, actually cited **BPCL SBI Card OCTANE's**
+    booklet -- a wholly unrelated card from a prior session (Phase 5,
+    docs/DECISIONS.md #146-149). Status: **approved** -- would have
+    published silently wrong.
+  - `prime_ktb` exclusion `ewallet_reward_exclusion`: should cite
+    Karnataka's own booklet, actually cited **City Union Bank's**
+    booklet. Status: **approved** -- would have published silently
+    wrong.
+
+**Root cause not fully established, but strongly narrowed**: `ingest
+link`'s own `link_entity` function only ever INSERTs a fresh
+`source_links` row using ITS OWN bundle's declared `sources[ref]['url']`
+at call time (verified by reading `ingest/link.py` directly) -- it
+never performs an UPDATE. The CUB->OCTANE mismatch rules out any bug
+in this batch's own linking code entirely (none of these 5 bundles
+reference OCTANE's URL anywhere). The most plausible explanation:
+something touched `source_id` values during Satya's own Supabase
+review pass -- e.g. a bulk edit/copy-paste across many of the 45 rows
+that shifted or scrambled the `source_id` column on a few of them
+while intending to touch only `reviewer_status`. Not conclusively
+proven (no audit log consulted) -- flagged as a real open question for
+how review passes are done in Supabase, not silently assumed.
+
+**Fixed via direct `UPDATE source_links SET source_id = ...`** for
+exactly the 3 affected rows (by their own `id`), touching NO other
+column -- confirmed `reviewer_status` unchanged on each (`unreviewed`
+stayed `unreviewed`, `approved` stayed `approved`) and the row count
+affected was exactly 1 per statement. Re-ran the full cross-check
+after the fix: 0 mismatches across all 45 links (`card_version` +
+`earning_rule` + `exclusion` + `cap` + `threshold` + `benefit` entity
+types, all 5 cards). Satya explicitly authorized this fix by naming
+the exact 3 rows and their correct `source_id` values; the fix touched
+only what he named.
+
+**Consequence for this batch's `reviewer_status` gate itself**: fixing
+`source_id` did not and should not touch `reviewer_status` -- 7 links
+(1 for `prime_psb`, 6 for `prime_ktb`) remain genuinely unreviewed,
+unrelated to the corruption (they were simply never approved). BOM,
+UCO, and City Union Bank had all their own links approved AND (after
+the fix) correctly cited -- published. PSB and Karnataka Bank remain
+`draft`, blocked on Satya's own review pass for their own remaining
+unreviewed links.
+
+**Published, verified live against the DB** (`status='published'`,
+`published_at` set, `effective_to=NULL`): `prime_bom`
+(f2a6e501-8306-4c90-8551-d31d8a2b5a6d), `prime_uco`
+(e6ba1949-310b-4363-9294-e370d0220b53), `prime_cub`
+(c9cc7477-4012-4576-bdbb-6234c38d04d4). `prime_psb` and `prime_ktb`
+NOT published -- still have unreviewed links.
+
+**Open follow-up, not resolved here**: SS I.8's publish gate could be
+strengthened to cross-check `source_id` against the bundle file at
+publish time (not just `reviewer_status`), which would have caught
+this class of corruption automatically. Not built in this pass --
+flagged for a future session, since fixing it now would be scope creep
+on top of an already-eventful publish step.
