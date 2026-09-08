@@ -18,7 +18,7 @@ Usage:
     python -m ingest lint compute/ingestion/bundle_sbi_cashback.json
     DATABASE_URL=postgresql://... python -m ingest link compute/ingestion/bundle_sbi_cashback.json
     DATABASE_URL=postgresql://... python -m ingest review-queue
-    DATABASE_URL=postgresql://... python -m ingest publish <card_version_id> --golden compute/ingestion/golden_sbi_cashback.json
+    DATABASE_URL=postgresql://... python -m ingest publish <card_version_id> --golden compute/ingestion/golden_sbi_cashback.json --bundle compute/ingestion/bundle_sbi_cashback.json
     python -m ingest reward-catalog-ratio --card sbi-card-prime --card sbi-card-elite --out compute/ingestion/reference_reward_point_values.json
 """
 from __future__ import annotations
@@ -237,7 +237,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
 
     try:
         with conn:
-            result = publish_card_version(conn, args.card_version_id, args.golden or [])
+            result = publish_card_version(conn, args.card_version_id, args.golden or [], args.bundle)
     except PublishError as e:
         print(f"ingest publish: REFUSED -- {e}", file=sys.stderr)
         return 1
@@ -317,6 +317,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--golden", action="append",
         help="Path to a hand-computed golden JSON (repeatable). At least one scenario across all given "
              "files must pass evaluate_card exactly (SS I.8) -- required.",
+    )
+    publish_parser.add_argument(
+        "--bundle", required=True,
+        help="Path to the ORIGINAL ingestion bundle JSON for this card_version -- cross-checked against "
+             "the live source_links rows (docs/DECISIONS.md #158: every entity's source_id must still "
+             "resolve to the document this bundle declares for it, not just be reviewer_status='approved').",
     )
     publish_parser.set_defaults(func=cmd_publish)
 

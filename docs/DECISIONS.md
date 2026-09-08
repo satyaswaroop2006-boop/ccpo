@@ -5501,3 +5501,111 @@ review-queue`'s status count alone.
 Full suite re-run after both publishes: expected 437/437 green + 1
 skipped, unchanged (publishing touches only `card_versions`/
 `source_links` status in the DB, no engine or test code).
+
+## 2026-09-08 -- `ingest publish` gains a source-provenance cross-check
+(the follow-up #158 itself flagged: "spun off as a background task
+immediately after this entry (`task_7785386b`)")
+
+This session started from a report describing the exact incident #158
+above records -- 3 of 45 `source_links` across the PRIME-family batch
+found pointing at a different card's document than their own bundle
+declared, 2 already `approved`, discovered before publish rather than
+by the gate itself. Built from a stale local `main` (branched before
+#158/#159 landed), this session's own copy of `docs/DECISIONS.md` had
+no record of the incident yet, so it was initially flagged back as a
+discrepancy ("the referenced #158 doesn't exist in this history").
+Rebasing onto the real `main` resolves that: the incident IS recorded,
+right above, exactly as #158's own final paragraph anticipated. This
+entry is that flagged follow-up, actually built -- renumbered to #160
+here since #158/#159 were claimed by the incident write-up itself in
+the meantime.
+
+### 160. `ingest publish`'s SS I.8 gate only ever checked
+`reviewer_status='approved'` -- never that the approved row's own
+`source_id` still resolves to the RIGHT document
+
+`_check_source_links_gate` (`compute/ingest/publish.py`) has always
+verified every `source_links` row on a card_version and its children is
+`reviewer_status='approved'` (docs/DECISIONS.md #141/#148). It never
+checked the OTHER half of provenance: that the approved row's
+`source_id` still points at a `sources` row whose URL matches what the
+entity's own ingestion bundle actually declared for it. A `source_links`
+row can drift from correct to wrong -- entered against the wrong
+`source_id` during manual review in Supabase's Table Editor, for
+instance -- and pass this gate cleanly regardless, so long as its
+`reviewer_status` happens to be `'approved'`. Nothing previously built
+in this repo (`ingest lint`, `ingest link`, or `ingest publish`'s
+existing checks) verifies this.
+
+**Fix**: a new `_check_source_provenance_gate` (`compute/ingest/
+publish.py`), run as the second of what is now FOUR publish-gate checks
+(inserted between the existing reviewer_status check and the existing
+engine-compatibility check; module docstring renumbered 1-4). For every
+entity `entities_for_card_version` already enumerates (the card_version
+itself plus its `earning_rules`/`caps`/`thresholds`/`exclusions`/
+`benefits`/`surcharges`), it resolves the entity's LIVE `source_links`
+rows to their `sources.url`, and cross-checks that URL against the set
+of URLs the entity's OWN ORIGINAL BUNDLE FILE declares for it (via a new
+`ingest.bundle.entities_by_type_and_key`, keyed the same way
+`ingest.publish.entities_for_card_version` already labels DB entities).
+A mismatch refuses loudly, naming the entity, the live URL, and the
+bundle-declared URL(s) -- same posture as every other check in this
+module.
+
+This is a materially different check from `_check_engine_compatibility`
+directly above it in the same function: that check deliberately
+re-derives its bundle FROM the live database (to catch drift from what
+LINT originally validated), while THIS check needs the ORIGINAL BUNDLE
+FILE -- the file is the human-reviewed statement of intent ("this
+entity's evidence lives at this URL"), and there is nothing in the
+database alone to cross-check that statement against. `publish_card_
+version` therefore gained a new required 4th parameter, `bundle_path`
+(CLI: a new required `--bundle` flag on `ingest publish`) -- every
+existing call site (`ingest/cli.py`, both integration test files) was
+updated accordingly, not left on an optional/defaulted shim.
+
+**A real false positive found and fixed while testing this against the
+devaluation-flow fixture, not assumed away**: the new check initially
+covered `reward_currency`/`redemption_route` too (reusing `_currency_
+entities_for_card_version`, the same list check 1 already covers). This
+broke `test_full_devaluation_cycle_closes_out_the_predecessor_on_publish`
+for a legitimate reason, not a test bug: `ingest link`'s own `_resolve_
+currency` reuses an EXISTING currency (and its routes) by key without
+inserting any new `source_links` row for it (the exact "only the DB's
+existing route is ever actually used" pattern #157 already documented
+for the PRIME family's shared `sbi_prime_points` currency). A reused
+currency's live `source_links` row legitimately still cites whichever
+bundle FIRST introduced it -- not necessarily the bundle currently being
+published -- so comparing it against the CURRENT bundle's own declared
+URL is a false positive, not a real provenance mismatch. Fixed by
+scoping the new check to `entities_for_card_version` only (card_version
++ rule-level children), excluding currency/route entirely, with the
+reasoning recorded in `_check_source_provenance_gate`'s own docstring.
+A currency/route provenance check would need to know which bundle
+originally linked a given currency, which nothing in this schema
+records -- a real, separate, un-closed gap, not silently pretended away
+by including entities this check would get wrong.
+
+### Verification
+
+`tests/test_ingest_publish.py` gained two new tests, both run for real
+against the live Supabase database (not skipped -- `DATABASE_URL` was
+reachable for this verification pass):
+`test_publish_refuses_when_a_source_link_points_at_a_different_entitys_
+document` directly reproduces the reported incident -- links a fresh
+bundle, approves everything, then corrupts one `earning_rule`'s
+`source_links.source_id` to point at a newly-inserted, wholly unrelated
+`sources` row (standing in for "a different card's document"), and
+confirms `ingest publish` refuses with a `PublishError` naming the
+entity and both URLs; `test_publish_refuses_when_bundle_path_does_not_
+match_the_linked_card` confirms a wrong/mismatched `--bundle` path (one
+whose entity keys don't line up with what's actually in the database)
+is refused rather than silently skipped. Every pre-existing call to
+`publish_card_version` across both integration test files was updated
+to pass a real `--bundle` path (written to `tmp_path` from the same
+dict used to `link_bundle`), including the devaluation flow's own two-
+version cycle. Full suite: 439 passed, 1 skipped (the permanent CASHBACK
+EMI-scenario skip, docs/DECISIONS.md #112) -- run twice against the live
+database: once before the currency/route scoping fix (1 real failure,
+`test_full_devaluation_cycle_closes_out_the_predecessor_on_publish`,
+diagnosed above) and once after (clean).

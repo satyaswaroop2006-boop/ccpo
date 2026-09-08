@@ -19,7 +19,7 @@ about the predecessor's rule data is touched, and it remains queryable
 forever (SS I.6: "both versions remain queryable forever; nothing is
 deleted or overwritten").
 
-SS I.4's gate, restated as three checks this module actually runs:
+SS I.4's gate, restated as four checks this module actually runs:
 
 1. **Every source_link on the card_version and its children is
    'approved'** -- PLUS the card's own `reward_currency`/`redemption_
@@ -35,7 +35,25 @@ SS I.4's gate, restated as three checks this module actually runs:
    gets a second `source_links` row: there is exactly ONE review to do
    per shared currency, ever, not repeated per card that reuses it.
    Satya confirmed: gate on it.
-2. **Passes engine-compatibility validation.** Re-run directly against
+2. **Every one of those same source_links rows actually cites the RIGHT
+   document** -- docs/DECISIONS.md #158: check 1 only ever verified
+   `reviewer_status='approved'`, never that the approved row's own
+   `source_id` still points at a `sources` row matching the entity's OWN
+   document. The PRIME-family batch ingestion found 3 of 45 source_links
+   pointing at a DIFFERENT card's document than their own bundle
+   declared (2 already 'approved') -- check 1 alone would have sailed
+   straight past both. `_check_source_provenance_gate` cross-references
+   every entity's live `source_links.source_id` (resolved to its
+   `sources.url`) against the URL the ORIGINAL BUNDLE FILE (the required
+   `--bundle` argument, not the DB-reconstructed dict check 3 below
+   deliberately avoids) declares for that entity's own `source_refs`/
+   `_source`. Refuses loudly, naming the entity and both URLs (expected
+   vs actual), same posture as every other check here. Scoped to the
+   card_version and its rule-level children only -- NOT `reward_currency`/
+   `redemption_route`, which `ingest link` reuses across cards without
+   re-linking (see `_check_source_provenance_gate`'s own docstring for
+   why checking them here would produce false positives).
+3. **Passes engine-compatibility validation.** Re-run directly against
    what's actually IN THE DATABASE right now (not the original bundle
    file, which could have drifted) -- `bundle_from_dict` plus the same
    `match.validate_rule`/`eligibility.validate_exclusion`/`costs.
@@ -44,7 +62,7 @@ SS I.4's gate, restated as three checks this module actually runs:
    (confirmed by search, same as `ingest lint`'s own stated limit) --
    this is genuinely a subset of SS I.4's "C.11 + provenance
    completeness" language, not the whole thing.
-3. **At least one hand-computed golden scenario passes**, evaluated
+4. **At least one hand-computed golden scenario passes**, evaluated
    through the REAL `engine.evaluate.evaluate_card` against what's in
    the database (SS I.8). A golden file may hold one scenario (`compute/
    goldens/golden_syn_*.json`'s own shape: `spend_annual`/`expected` at
@@ -74,6 +92,7 @@ from engine.eligibility import validate_exclusion
 from engine.evaluate import EvaluateAssumptions, evaluate_card
 from engine.match import validate_rule
 from engine.normalise import CategorySpend, SpendInput
+from ingest.bundle import declared_sources, entities_by_type_and_key, load_ingestion_bundle, source_refs
 
 _CARD_CHILD_TABLES = {
     "earning_rule": "earning_rules",
@@ -187,6 +206,88 @@ def _check_source_links_gate(cur, card_version_id: Any) -> list[str]:
             not_approved = sorted(s for s in statuses if s != "approved")
             if not_approved:
                 problems.append(f"{entity_type} {key!r}: {len(not_approved)} source_link(s) not approved (status: {not_approved})")
+    return problems
+
+
+def _declared_urls_for_entity(bundle_file: dict[str, Any], entity: dict[str, Any]) -> set[str] | None:
+    """URLs the ORIGINAL BUNDLE FILE declares for one entity's own
+    `source_refs`/`_source`, resolved through that same file's own
+    `sources`/`_sources` block. `None` when the entity cites nothing
+    resolvable in this bundle -- already `ingest lint`'s own job to flag
+    (an unresolvable ref, or none declared at all), not re-flagged here."""
+    declared = declared_sources(bundle_file)
+    urls = {declared[ref]["url"] for ref in source_refs(entity) if ref in declared}
+    return urls or None
+
+
+def _check_source_provenance_gate(cur, card_version_id: Any, bundle_file: dict[str, Any]) -> list[str]:
+    """docs/DECISIONS.md #158: the source_links gate above only ever
+    checked `reviewer_status='approved'` -- it never confirmed the
+    approved row's OWN `source_id` still resolves to a `sources` row
+    matching the entity's OWN document. Found during the PRIME-family
+    batch ingestion: 3 of 45 source_links pointed at a DIFFERENT card's
+    document than their own bundle declared (e.g. a benefit linked to an
+    unrelated card's T&C booklet), 2 of them already 'approved' --
+    the old gate would have sailed straight past both.
+
+    Unlike `_check_engine_compatibility` (deliberately re-derives its
+    bundle FROM the live database, to catch drift from what LINT
+    originally validated), this check needs the ORIGINAL BUNDLE FILE:
+    the file is the human-reviewed statement of intent ("this entity's
+    evidence lives at this URL") the live `source_links` row is being
+    checked AGAINST -- there is nothing in the database alone to
+    cross-check that statement against.
+
+    Deliberately scoped to `entities_for_card_version` only -- the
+    card_version and its rule-level children (earning_rule/cap/threshold/
+    exclusion/benefit/surcharge), i.e. exactly the entities `ingest link`
+    inserts a BRAND NEW `source_links` row for on every single run, always
+    citing THAT run's own bundle. `reward_currency`/`redemption_route` are
+    deliberately excluded: `ingest link`'s own `_resolve_currency` reuses
+    an existing currency's id (and its routes) by key without inserting
+    any new `source_links` row for it (confirmed live -- caught while
+    testing this very check against the devaluation flow's own currency-
+    reuse fixture, docs/DECISIONS.md #157's same "only the DB's existing
+    route is ever actually used" pattern) -- so a reused currency's live
+    source_links legitimately still cites whichever bundle FIRST
+    introduced it, not necessarily the bundle currently being published.
+    Comparing that against the CURRENT bundle's own declared URL would be
+    a false positive, not a real provenance mismatch. A currency/route
+    provenance check would need to know which bundle originally linked
+    it, which nothing in this schema records -- a real, separate gap, not
+    silently pretended away by including entities this check would get
+    wrong."""
+    problems: list[str] = []
+    bundle_entities = entities_by_type_and_key(bundle_file)
+    all_entities = entities_for_card_version(cur, card_version_id)
+
+    for entity_type, entity_id, key in all_entities:
+        bundle_entity = bundle_entities.get((entity_type, key))
+        if bundle_entity is None:
+            problems.append(
+                f"{entity_type} {key!r}: no matching entity in the given --bundle file -- wrong bundle "
+                "path, or the database has an entity this bundle doesn't declare; cannot verify source "
+                "provenance"
+            )
+            continue
+
+        declared_urls = _declared_urls_for_entity(bundle_file, bundle_entity)
+        if declared_urls is None:
+            continue
+
+        cur.execute(
+            "select sl.id, s.url from source_links sl join sources s on s.id = sl.source_id"
+            " where sl.entity_type = %s and sl.entity_id = %s",
+            (entity_type, entity_id),
+        )
+        for source_link_id, live_url in cur.fetchall():
+            if live_url not in declared_urls:
+                problems.append(
+                    f"{entity_type} {key!r}: source_links row {source_link_id} points at {live_url!r}, "
+                    f"but the bundle file declares {sorted(declared_urls)!r} for this entity -- "
+                    "provenance mismatch (source_id likely points at a different card/entity's document); "
+                    "fix the source_links row in Supabase before retrying"
+                )
     return problems
 
 
@@ -490,7 +591,7 @@ def _run_scenario(bundle: CardRuleBundle, currencies: dict, golden_path: str, na
     return ScenarioResult(golden_path=golden_path, scenario_name=name, passed=not diffs, diffs=tuple(diffs))
 
 
-def publish_card_version(conn: psycopg.Connection, card_version_id: Any, golden_paths: list[str]) -> PublishResult:
+def publish_card_version(conn: psycopg.Connection, card_version_id: Any, golden_paths: list[str], bundle_path: str) -> PublishResult:
     with conn.cursor() as cur:
         cur.execute(
             "select c.key, cv.status from card_versions cv join cards c on c.id = cv.card_id where cv.id = %s",
@@ -504,6 +605,13 @@ def publish_card_version(conn: psycopg.Connection, card_version_id: Any, golden_
             raise PublishError(f"card_version {card_version_id} (card {card_key!r}) has status {status!r}, not 'draft' -- nothing to publish")
 
         problems = _check_source_links_gate(cur, card_version_id)
+
+        try:
+            bundle_file = load_ingestion_bundle(bundle_path)
+        except (OSError, ValueError) as e:
+            problems.append(f"--bundle {bundle_path!r} could not be loaded: {type(e).__name__}: {e} -- source-provenance check skipped")
+        else:
+            problems.extend(_check_source_provenance_gate(cur, card_version_id, bundle_file))
 
     bundle_dict = _fetch_bundle_dict_by_version_id(conn, card_version_id)
     problems.extend(_check_engine_compatibility(bundle_dict))

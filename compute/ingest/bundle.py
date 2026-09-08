@@ -108,6 +108,41 @@ def declared_sources(bundle: dict[str, Any]) -> dict[str, dict]:
     return {}
 
 
+def entities_by_type_and_key(bundle: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Every citable entity (see `citable_entities`), keyed by
+    `(entity_type, key)` matching `source_links.entity_type` plus the DB
+    row's own `key` column -- what `ingest publish`'s source-provenance
+    cross-check (docs/DECISIONS.md #158) needs to go from "this live
+    source_links row belongs to DB entity X" back to "what URL did the
+    bundle FILE declare for X". `entity_type` uses `ENTITY_TYPE_BY_LIST_KEY`'s
+    vocabulary plus `"card_version"`/`"reward_currency"`/`"redemption_route"`,
+    matching `ingest.publish.entities_for_card_version`'s own labelling
+    exactly (including its hardcoded `"(card_version)"` placeholder key,
+    since the card_version entity itself has no `key` column of its own)."""
+    result: dict[tuple[str, str], dict[str, Any]] = {}
+
+    if "version" in bundle:
+        result[("card_version", "(card_version)")] = bundle["version"]
+
+    for list_key in ENTITY_LIST_KEYS:
+        entity_type = ENTITY_TYPE_BY_LIST_KEY[list_key]
+        items = bundle.get(list_key, [])
+        if isinstance(items, dict):
+            items = list(items.values())
+        for item in items:
+            if "key" in item:
+                result[(entity_type, item["key"])] = item
+
+    for currency in bundle.get("currencies", []):
+        if "key" in currency:
+            result[("reward_currency", currency["key"])] = currency
+        for route in currency.get("routes", []):
+            if "key" in route:
+                result[("redemption_route", route["key"])] = route
+
+    return result
+
+
 def citable_entities(bundle: dict[str, Any]) -> tuple[CitedEntity, ...]:
     """Every object Part I SS I.4's provenance-completeness check must
     inspect: card_version fees, each earning_rule/cap/threshold/
