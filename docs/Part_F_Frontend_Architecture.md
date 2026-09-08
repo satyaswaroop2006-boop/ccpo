@@ -1,10 +1,11 @@
 # Credit Card Portfolio Optimiser — Part F
 ## Frontend Architecture
 
-Version 0.2 · Five scope/stack/auth decisions below resolved directly with
-Satya (2026-09-08, docs/DECISIONS.md #160); no frontend code follows until a
-final full read-through is confirmed, per CLAUDE.md's working style — same
-posture Part I took before any `compute/ingest/` code was written. Consumes
+Version 0.3 · **APPROVED** 2026-09-08 (docs/DECISIONS.md #160/#162) — five
+scope/stack/auth decisions resolved directly with Satya, then a final
+read-through found and closed one real technical gap (F.4/F.8's
+`bundle_path` note) before sign-off, same posture Part I took before any
+`compute/ingest/` code was written. Consumes
 Part E §E.15's own forward pointer ("Part F consumes: the frontier table,
 the checklist rows, the classification set, marginal bands, and the trace
 ledgers — every screen is a rendering of a stored structure, no screen
@@ -119,9 +120,10 @@ opening Supabase directly.
   RLS-on, read-for-everyone).
 
 **New API need**: `GET /cards` (list) and `GET /cards/{key}` (detail) — the
-`CardRepository` interface (`app/repository.py`) already has
-`get_all_card_bundles()`, so this is a thin read-only wrapper, not new
-engine logic.
+`CardRepository` interface (`app/repository.py`) already has both
+`get_all_card_bundles()` and `get_card_bundle(card_key)` (verified present
+on both the synthetic and Postgres implementations), so this is a thin
+read-only wrapper over each, not new engine logic.
 
 ## F.2.2 Calculator
 
@@ -248,13 +250,33 @@ by construction, it doesn't try to also cover the rare "the citation itself
 is wrong" case, which is Part I's own DRAFT-stage concern, not REVIEW's.
 
 The same narrowness applies to `/card-versions/{id}/publish`: it calls
-`ingest.publish`'s own existing gate-check function directly, the same
-code path the CLI uses, rather than a second implementation of SS I.8's
-rules that could quietly drift from the CLI's over time. The endpoint
-either flips `status='published'` (gate passed) or returns the same
-"REFUSED — publish gate failed... naming exactly which condition failed"
-error the CLI already produces — no new publish logic, no new failure
-modes.
+`ingest.publish.publish_card_version` directly, the same code path the
+CLI uses, rather than a second implementation of SS I.8's rules that
+could quietly drift from the CLI's over time. The endpoint either flips
+`status='published'` (gate passed) or returns the same "REFUSED —
+publish gate failed... naming exactly which condition failed" error the
+CLI already produces — no new publish logic, no new failure modes.
+
+**A real gap found during this document's final read-through (2026-09-08,
+after docs/DECISIONS.md #161 landed), not present when v0.1 was first
+drafted**: `publish_card_version` now takes a required `bundle_path`
+argument (#161's own source-provenance cross-check needs the original
+bundle FILE, not just the database, to verify a citation is still
+correct) — but nothing in the schema records which bundle file a given
+`card_version` was linked from. The CLI sidesteps this because a human
+supplies `--bundle` by hand each time; an API endpoint driven by a
+button click has no human to ask. **Resolution, needed before Slice 7
+(F.8) can be built, not before this document's own approval**: add a
+`bundle_path` column to `card_versions`, populated by `ingest link` at
+LINK time (the bundle file's own path is already known at that moment,
+it's just never been persisted) — a small, additive schema change, not
+a redesign of anything Part I or this document already decided. Rows
+linked before this column exists (every real card published so far)
+would need either a one-time backfill from their own known file paths
+or to stay CLI-publishable-only until backfilled; this document doesn't
+resolve which, since it's a Part I/D-layer schema question, not a
+frontend one — flagged here because F.2.3's Publish button surfaced it,
+same as #158 surfaced the review-UI need itself.
 
 # F.5 Tech stack (DECIDED — Next.js + TypeScript + Supabase Auth)
 
@@ -364,6 +386,11 @@ Restating CLAUDE.md's own rules as they bind this layer specifically:
 7. **Slice 7**: `POST /card-versions/{id}/publish` (F.3, F.4) + the
    guarded Publish button (F.2.3) — last, since it's the one irreversible
    action and deserves the most deliberate review before shipping.
+   **Prerequisite, found during this document's final read-through**: a
+   `bundle_path` column on `card_versions` (F.4's own note) needs adding
+   and backfilling before this slice can call `publish_card_version` at
+   all — a small Part I/D-layer schema change, sequenced before Slice 7
+   starts, not blocking Slices 1–6.
 
 Each slice: built, manually verified against a running `uvicorn` instance
 (per this repo's own "show what changed, which tests pass, one worked
@@ -411,5 +438,11 @@ directly with Satya, one at a time, before any code follows:
    screen, calling the same gate-check the CLI already uses (F.4) — not
    CLI-only.
 
-This document is otherwise ready for a final full read-through before
-Slice 1 (F.8) begins.
+**Final read-through (2026-09-08, docs/DECISIONS.md #162)** cross-checked
+every technical claim above against the live codebase — including the
+publish-gate hardening (#161) that landed concurrently with this
+document's own drafting — and found one real gap: `publish_card_version`
+now requires a `bundle_path` the schema doesn't yet track anywhere (F.4,
+F.8 Slice 7). Fixed by adding that as an explicit Slice 7 prerequisite,
+not by silently glossing over it. With that closed, **this document is
+APPROVED** — Slice 1 (F.8) may begin.

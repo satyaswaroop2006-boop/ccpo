@@ -5686,3 +5686,55 @@ EMI-scenario skip, docs/DECISIONS.md #112) -- run twice against the live
 database: once before the currency/route scoping fix (1 real failure,
 `test_full_devaluation_cycle_closes_out_the_predecessor_on_publish`,
 diagnosed above) and once after (clean).
+
+---
+
+## 2026-09-08 -- Part F approved, after a final read-through caught a
+real gap the concurrent publish-gate session's own changes introduced
+
+### 162. Part F's final read-through cross-checked every technical
+claim against the live codebase (not a re-read of the prose) -- found
+`publish_card_version`'s new required `bundle_path` argument (#161) has
+nothing in the schema to supply it from an API endpoint
+
+Asked to do a final read-through and confirm approval. Rather than
+re-reading the document's own prose for internal consistency alone,
+cross-checked its concrete technical claims against the CURRENT
+codebase -- necessary specifically because #161's publish-gate
+hardening landed and was merged in between v0.1's drafting and this
+read-through, changing the exact function (`publish_card_version`)
+F.2.3/F.4's Publish button design names.
+
+**Confirmed still accurate**: `CardRepository.get_all_card_bundles()`
+and `get_card_bundle(card_key)` both exist on both implementations
+(F.2.1); `app/schemas.py`/`app/main.py` untouched by the merged commits
+(verified via `git diff --stat`), so every `EvaluateResponse`/
+`OptimiseResponse` field F.2.2 names is still correct.
+
+**Found genuinely wrong**: `publish_card_version` (`compute/ingest/
+publish.py`) now takes a required 4th parameter, `bundle_path` --
+added by #161 so the new source-provenance check can read the ORIGINAL
+bundle file, not just the database. The CLI supplies this because a
+human types `--bundle <path>` each time. Nothing in `card_versions` (or
+anywhere else) records which bundle file a given card_version was
+linked from, so an API endpoint driven by a button click -- no human
+typing a path -- has no way to resolve this argument on its own. This
+would have silently blocked F.8's Slice 7 (the Publish button) the
+moment it was actually built, not a cosmetic issue.
+
+**Fixed in the document, not the schema** (a schema change is out of
+scope for a read-through, and is Part I/D's layer, not Part F's):
+`docs/Part_F_Frontend_Architecture.md` F.4 and F.8 Slice 7 both updated
+to name the prerequisite explicitly -- a `bundle_path` column on
+`card_versions`, populated by `ingest link` at LINK time, needs adding
+(and existing rows backfilled or left CLI-only) before Slice 7 can be
+built. Slices 1-6 are unaffected and unblocked.
+
+Also tightened one imprecise claim (F.2.1 undersold `CardRepository`'s
+existing read surface -- both list AND single-card lookup methods
+already exist, not just the list one).
+
+**Part F is APPROVED** (v0.3) -- Slice 1 of its own 7-slice build order
+may begin. No frontend or `compute/` code written this entry; this was
+verification-only, closing the loop v0.1 opened ("no frontend code
+follows until a final full read-through is confirmed").
