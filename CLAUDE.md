@@ -281,10 +281,57 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       specifies `source_refs` (a list); the one real bundle independently
       settled on `_source` (a string) — both now accepted rather than
       forcing a fourth edit of an already-approved artifact. 294/294
-      tests green + 1 skipped. **Not built yet**: `ingest link`/`review-
-      queue`/`publish` (touch Postgres) — no CLI stubs registered for
-      them, since that would look like partial coverage of something
-      that doesn't exist.
+      tests green + 1 skipped.
+      **`ingest link`/`review-queue`/`publish` built, CASHBACK published**
+      (#140–148): the full CAPTURE→DRAFT→LINT→LINK→REVIEW→PUBLISH
+      pipeline is now real, not just lint. `publish` gates on source_links
+      review status (later widened to cover the card's shared reward_
+      currency/redemption_route too, #148), engine-compatibility
+      re-validated straight from the DB (not the original file, to catch
+      drift), and ≥1 hand-computed golden passing (SS I.8). CASHBACK SBI
+      published (#142) — first real card live.
+      **PRIME published — first points card** (#149–153): needed a new
+      `ingest reward-catalog-ratio` tool to derive a points-to-rupee ratio
+      from SBI's live rewards catalog (no fixed T&C rate exists), logged
+      explicitly as an assumption-registry default, not a citable fact
+      (#150). Also closed a schema gap (`redemption_routes.ratio` is
+      `NOT NULL`, #151) and added `flat_redemption_fee`/A.12's
+      `RedemptionFees(c)` support (#153). Second real card live.
+      **OCTANE (first fuel card) and ELITE (first multi-tier cumulative
+      milestone) published** (#154–156): third and fourth real cards live.
+      **PRIME-family batch — 5 co-brand cards in one pass** (#157–159):
+      Bank of Maharashtra, PSB, UCO Bank, City Union Bank, and Karnataka
+      Bank SBI Card PRIME — all structurally and economically identical
+      to base PRIME (same NACV, Rs.5,700.24 steady-state), validating
+      that batching works before harder families. **A real production
+      incident was found and fixed here, not simulated**: before running
+      `ingest publish`, a full DB-vs-bundle cross-check (going beyond what
+      the publish gate itself checks) found 3 of 45 `source_links` rows
+      pointing at a DIFFERENT card's document than their own bundle
+      declared — 2 already `reviewer_status='approved'`, meaning the
+      existing gate would have published them silently wrong (#158).
+      Fixed by hand (exact rows named, only `source_id` touched); all 6
+      PRIME-family cards (base + 5 co-brands) now published (#159).
+      **`ingest publish`'s gate hardened in direct response to #158**
+      (#160): a new fourth check, `_check_source_provenance_gate`
+      (`compute/ingest/publish.py`), cross-references every rule-level
+      entity's live `source_links.source_id` against the URL its
+      ORIGINAL BUNDLE FILE declares (not just `reviewer_status`), so the
+      #158 class of corruption is now refused automatically rather than
+      needing a manual cross-check every time. Deliberately does NOT
+      cover `reward_currency`/`redemption_route` — `ingest link` reuses
+      those across cards without re-linking, so checking them would
+      false-positive (found and fixed while testing, using the
+      devaluation-flow fixture). `ingest publish` now requires a
+      `--bundle` path. Verified against a deliberately-corrupted fixture
+      reproducing #158 exactly. 439 passed, 1 skipped, run twice against
+      the live Supabase database.
+      **Live catalog as of this entry** (verified by direct DB query,
+      not inferred from this log): 9 real cards published — `cashback_
+      sbi`, `prime_sbi`, `bpcl_octane_sbi`, `sbi_card_elite`, `prime_bom`,
+      `prime_uco`, `prime_cub`, `prime_ktb`, `prime_psb` — plus all 12
+      synthetic fixtures. Phase 5 remains open-ended (more real-card
+      families still to ingest); not marked complete.
 - [ ] Phase 6 — frontend (Part F, to be authored)
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
