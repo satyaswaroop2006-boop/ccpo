@@ -388,8 +388,24 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       through a second, independent path. A multi-route card (BPCL
       OCTANE) surfaced a clean, honest error with no special-casing.
       One real mobile bug found and fixed (a spend row overflowed the
-      viewport instead of wrapping). Slices 4-7 (portfolio Calculator,
-      auth, Ingestion Review, Publish) not started.
+      viewport instead of wrapping). **Slice 4 done** (#166): the
+      Calculator, portfolio mode (`/optimise`), reusing Slice 3's spend
+      form behind a mode toggle. The SAME countable-benefit problem
+      recurred one level up -- `/optimise`'s own pre-flight probe
+      EXCLUDES rather than crashes on an unsupplied one, so every
+      PRIME-family card/ELITE/`syn_lounge` would silently vanish from
+      consideration without the same fix, discovered generically per
+      request rather than hardcoding the two keys found in the live DB.
+      Caught and fixed a real spec inaccuracy along the way (Part F's
+      own classification-label list was missing `NOT_MATERIAL`,
+      `optimiser/classify.py`'s 7th label). Verified against the live
+      21-card catalog twice; both runs correctly excluded 8 cards with
+      accurate reasons matching pre-existing documented engine gaps,
+      confirming #97/#98's "never silently dropped" design through the
+      UI. Mobile verification partial -- a tool-side click hang under
+      mobile emulation blocked live interaction testing of the
+      Portfolio flow specifically, noted honestly rather than assumed
+      clean. Slices 5-7 (auth, Ingestion Review, Publish) not started.
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
 change per stage: normalise → eligibility → match → accrue → caps →

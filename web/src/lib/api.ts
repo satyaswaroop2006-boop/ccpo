@@ -108,6 +108,92 @@ export class EvaluateError extends Error {
   }
 }
 
+// Mirrors app/schemas.py::ExcludedCardOut / FrontierPointOut /
+// RecommendationStepOut / CardClassificationOut / RobustnessOut /
+// OptimiseResponse.
+export interface ExcludedCardEntry {
+  card_key: string;
+  reason: string;
+}
+
+export interface FrontierPointEntry {
+  size: number;
+  subset_key: string;
+  card_keys: string[];
+  pv_exact: string;
+}
+
+export interface RecommendationStepEntry {
+  size: number;
+  delta_v: string;
+  t1_pass: boolean;
+  t1_threshold: string;
+  delta_fee: string;
+  delta_gross_benefit: string;
+  fee_cover_ratio: string | null;
+  t2_pass: boolean;
+  low_spend_delta_v: string | null;
+  t3_pass: boolean | null;
+  passes: boolean;
+  explanation: string; // already plain-rupees prose (Part E SS E.9) -- render verbatim, don't re-summarize
+}
+
+export interface CardClassificationEntry {
+  card_key: string;
+  label: string; // "KEEP" | "OPTIONAL" | "CLOSE" | "HOLD" | "ADD" | "DOWNGRADE"
+  icv: string;
+  overlap: string | null;
+  note: string | null;
+  downgrade_to: string | null;
+}
+
+export interface RobustnessEntry {
+  v_expected: string;
+  v_low: string;
+  v_high: string;
+  robustness: string | null; // v_low / v_expected -- null when v_expected <= 0 (no positive value to keep)
+  rank_stable: boolean;
+}
+
+export interface OptimiseResponse {
+  candidates: string[];
+  excluded_cards: ExcludedCardEntry[];
+  frontier: FrontierPointEntry[];
+  recommendation_steps: RecommendationStepEntry[];
+  recommended_size: number;
+  capped_by_tolerance: boolean;
+  recommended_subset_key: string;
+  recommended_card_keys: string[];
+  recommended_pv_exact: string;
+  classification_owned: CardClassificationEntry[];
+  classification_candidates: CardClassificationEntry[];
+  robustness: RobustnessEntry | null;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    // Never cached (each call is a distinct, unrepeatable computation
+    // over this specific input) -- Part F §F.0's "no screen computes a
+    // rupee value" boundary: every POST here is the ONE place a screen
+    // ever asks compute/ for a number, never derives one itself.
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail: unknown = text;
+    try {
+      detail = JSON.parse(text).detail ?? text;
+    } catch {
+      // body wasn't JSON -- fall through with the raw text
+    }
+    throw new EvaluateError(res.status, typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return res.json();
+}
+
 async function apiFetch(path: string): Promise<Response> {
   return fetch(`${API_BASE_URL}${path}`, {
     // Server-rendered catalog data (Part F §F.5's own SEO rationale for
@@ -137,31 +223,24 @@ export async function getCard(cardKey: string): Promise<CardDetail> {
   return res.json();
 }
 
-// POST-only, never cached (each call is a distinct, unrepeatable
-// computation over this specific spend/assumptions input) -- Part F
-// §F.0's "no screen computes a rupee value" boundary: this is the ONE
-// place Slice 3 ever asks compute/ for a number, never derives one
-// itself.
 export async function evaluateCard(
   cardKey: string,
   spend: SpendItemIn[],
   assumptions: AssumptionsIn = {},
 ): Promise<EvaluateResponse> {
-  const res = await fetch(`${API_BASE_URL}/evaluate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ card_key: cardKey, spend, assumptions }),
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    let detail = body;
-    try {
-      detail = JSON.parse(body).detail ?? body;
-    } catch {
-      // body wasn't JSON -- fall through with the raw text
-    }
-    throw new EvaluateError(res.status, typeof detail === "string" ? detail : JSON.stringify(detail));
-  }
-  return res.json();
+  return postJson<EvaluateResponse>("/evaluate", { card_key: cardKey, spend, assumptions });
+}
+
+// Part F §F.2.2's Calculator, portfolio mode (Slice 4, §F.8). Deliberately
+// minimal request surface -- OptimiseRequest has ~13 fields total
+// (candidate_universe, cardinality_mode, icv_meaningful, the champion-
+// selection tuning knobs, ...), every one of which already has a sensible
+// server-side default (app/schemas.py::OptimiseRequest); Slice 4 exposes
+// none of them as UI controls, same "smallest possible" posture as every
+// prior slice. `candidate_universe` left unset -> the full live catalog,
+// same as the CLI/API's own default. `assumptions` IS threaded through
+// (unlike the rest of OptimiseRequest) because it's the same countable-
+// benefit necessity `runEvaluate` already has to handle -- see actions.ts.
+export async function optimiseCards(spend: SpendItemIn[], assumptions: AssumptionsIn = {}): Promise<OptimiseResponse> {
+  return postJson<OptimiseResponse>("/optimise", { spend, assumptions });
 }

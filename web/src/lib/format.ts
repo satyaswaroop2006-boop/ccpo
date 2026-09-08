@@ -42,6 +42,14 @@ export function formatAccrualRate(accrual: Record<string, unknown> | undefined):
   return String(accrual.type ?? "—");
 }
 
+// `robustness.robustness` (optimiser/scenarios.py::PortfolioRobustness)
+// is already the ratio V_low/V_expected -- this only formats it as a
+// percentage, same "format, don't derive" boundary as formatRupees.
+export function formatPercent(ratio: string | number): string {
+  const n = typeof ratio === "string" ? Number(ratio) : ratio;
+  return `${Math.round(n * 100)}%`;
+}
+
 export function selectorSummary(selector: Record<string, unknown> | undefined): string | null {
   if (!selector) return null;
   const categories = selector.categories as string[] | null | undefined;

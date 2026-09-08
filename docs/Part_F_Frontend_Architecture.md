@@ -146,7 +146,12 @@ Purpose: the actual product surface — "what should I do with my spending."
   - the classification screen (`CardClassificationOut[]` for
     `classification_owned` + `classification_candidates`) as a KEEP /
     OPTIONAL / CLOSE / HOLD / ADD / DOWNGRADE badge list (Part E §E.8, per
-    §E.15's forward pointer),
+    §E.15's forward pointer) -- **correction found while building Slice
+    4 (docs/DECISIONS.md #166)**: `optimiser/classify.py`'s own label
+    vocabulary is actually 7 values, not 6 -- it also emits
+    `NOT_MATERIAL` (a candidate whose ICV, even if positive, doesn't
+    clear the materiality bar), confirmed directly against the source
+    rather than trusting this summary a second time,
   - robustness (`RobustnessOut | None`) as the "keeps X% of its value if
     your spending drops 20%" headline Part E §E.11 specifies verbatim.
 - `excluded_cards` rendered honestly (per docs/DECISIONS.md #97/#98's own
@@ -412,8 +417,30 @@ Restating CLAUDE.md's own rules as they bind this layer specifically:
    One real mobile bug found and fixed: the spend row (category +
    amount + geography + remove) overflowed the viewport horizontally
    instead of wrapping -- `flex-wrap` fix, verified on a 375px screenshot.
-4. **Slice 4**: Calculator, portfolio mode (`/optimise`) — the frontier
-   chart, checklist, classification badges, robustness headline.
+4. **Slice 4 — DONE (2026-09-08, docs/DECISIONS.md #166)**: Calculator,
+   portfolio mode (`/optimise`). Reuses Slice 3's own spend-row UI
+   behind a Single card/Portfolio mode toggle (per Slice 3's own
+   docstring intent), a shared `Stat` tile extracted to `components/`
+   specifically to avoid a circular import between the two result-panel
+   files. `runOptimise` (a second Server Action) has the SAME countable-
+   benefit problem `runEvaluate` solved in Slice 3, one level up:
+   `/optimise`'s own pre-flight compatibility probe EXCLUDES rather
+   than crashes on an unsupplied countable benefit, so without this
+   fix every PRIME-family card, ELITE, and `syn_lounge` would silently
+   drop out of consideration. Discovered the live catalog's exact 2
+   countable-benefit keys (`priority_pass_lounge`, `dom_lounge`) by
+   querying the DB directly, then chose to discover them generically
+   per-request (reusing Slice 1's `getCard`) rather than hardcode the
+   pair, so a third one added later stays correct automatically. Found
+   and fixed a real spec inaccuracy while building the classification
+   badges (F.2.2's own list above, `NOT_MATERIAL` was missing). A live
+   end-to-end run against the real catalog correctly excluded 8 cards
+   with their own honest reasons (multi-route currencies, unsupported
+   cap scopes, incremental-tier rules) -- confirms docs/DECISIONS.md
+   #97/#98's "never silently dropped" design holds through the UI, not
+   just the API. Frontier chart and classification list built with
+   plain CSS (no charting library), consistent with every prior slice's
+   dependency-free approach.
 5. **Slice 5**: Supabase Auth wiring — session handling in Next.js, the
    server-side allow-list check (F.6), applied to a placeholder endpoint
    first to prove the mechanism works before any real mutation sits behind

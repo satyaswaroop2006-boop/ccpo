@@ -6011,3 +6011,102 @@ route error path (BPCL OCTANE), and a 375px mobile viewport (post-fix,
 clean wrap). No automated frontend test suite added, same posture as
 #164 -- Part F §F.8's own working-style note. Python suite unaffected
 (no `compute/` changes): still 458 passed, 1 skipped.
+
+---
+
+## 2026-09-08 -- Part F Slice 4 built: the Calculator, portfolio mode
+
+### 166. `/optimise` needed the SAME countable-benefit fix as `/evaluate`,
+one level up -- silently excludes rather than crashes, easy to miss;
+plus a real spec inaccuracy caught (7 classification labels, not 6)
+
+Asked to build Slice 4 (F.8). Portfolio mode reuses Slice 3's own
+spend-row UI behind a Single card/Portfolio mode toggle -- exactly what
+Slice 3's own docstring anticipated ("exercises the spend-input form
+once before Slice 4 reuses it"). Extracted the shared `Stat` tile into
+`components/Stat.tsx` specifically so `CalculatorForm.tsx` (which
+renders `OptimiseResultPanel`) and `OptimiseResultPanel.tsx` don't need
+to import from each other. `runOptimise` (`calculator/actions.ts`) is a
+second Server Action, same pattern as `runEvaluate` -- no new HTTP
+endpoint, `/optimise` already returns everything this screen renders.
+
+**The same constraint #165 solved, found again one level up**: `/optimise`'s
+own pre-flight compatibility probe (`_partition_universe`, `app/
+main.py`) doesn't crash on a card with an unsupplied countable benefit
+-- it EXCLUDES that card from consideration entirely, reporting it via
+`excluded_cards` rather than failing the request. This is easy to miss
+precisely because nothing fails loudly: every PRIME-family card, ELITE,
+and the synthetic `syn_lounge` fixture would silently drop out of
+portfolio consideration without this fix, and the request would still
+return 200 OK with a plausible-looking (but materially incomplete)
+recommendation. Queried the live DB directly to confirm the catalog's
+exact countable-benefit keys today (`priority_pass_lounge`,
+`dom_lounge` -- exactly two), but chose NOT to hardcode that pair in
+`runOptimise`: it fetches every card's own detail (reusing Slice 1's
+`getCard`, parallelised) and collects countable-benefit keys
+generically each request, the same discovery approach `runEvaluate`
+already uses for one card -- stays correct if a third one is ever
+published, a hardcoded pair wouldn't.
+
+**A real spec inaccuracy caught while building the classification
+badges, not copied forward uncritically**: Part F §F.2.2's own text
+(written in the original v0.1 draft) says the classification label set
+is "KEEP / OPTIONAL / CLOSE / HOLD / ADD / DOWNGRADE" -- six values.
+`optimiser/classify.py` actually defines seven: it also emits
+`NOT_MATERIAL` (a candidate whose ICV, even if positive, doesn't clear
+the materiality bar). Found immediately once a live run actually
+produced that label and it didn't match my own color-mapping table.
+Fixed in both places: the badge-style map (`OptimiseResultPanel.tsx`,
+explicit entry rather than relying on the neutral fallback it happened
+to hit by coincidence) and Part F's own F.2.2 text, corrected rather
+than left wrong for the next reader.
+
+**Verified against the real, live catalog, not a synthetic-only
+smoke test**: submitted grocery=Rs.3,00,000 + ecommerce=Rs.7,50,000
+(and separately grocery=Rs.5,00,000 alone) through the live Portfolio
+form. Both runs correctly excluded 8 of 21 cards with their own honest,
+specific reasons -- multi-route currencies needing a declared primary
+route (BPCL OCTANE, three `synth_points` cards), unsupported cap scopes
+(`cap_aggregate_monthly` scope='card' on CASHBACK SBI, `rule_group`-
+scoped cap on Synth Points Portal), and incremental-tier rules (Synth
+Slab Up) -- every one of these matches a documented, pre-existing
+engine gap (docs/DECISIONS.md #68/#70 and this repo's own `allocate.py`
+docstrings), not a new failure introduced by the frontend. Confirms
+#97/#98's "excluded cards reported, never silently dropped" design
+holds all the way through the UI, exercised for the first time outside
+a Python test.
+
+**Frontier chart and classification list**: plain CSS (flex/div bars,
+badge pills), no charting library -- same dependency-free posture as
+every prior slice.
+
+**Mobile verification, partial, noted honestly rather than assumed**:
+the mode toggle and reused spend-row form were confirmed clean at
+375px (same `flex-wrap` pattern already proven in Slice 3). The NEW
+portfolio-result components (frontier chart, classification rows) use
+the same flex/no-fixed-width patterns and were visually checked at a
+large viewport with no overflow -- but a live 375px interaction test
+of the Portfolio flow itself could not be completed: the Browser tool's
+`computer` click action hung consistently (30s timeout) specifically
+under mobile viewport emulation this session, across a fresh tab and
+after resetting emulation, while `find`/`navigate`/console all worked
+normally throughout (no page-side error) -- concluded to be a transient
+tool-side issue, not a code defect, and reported as such rather than
+either forcing a false "verified" claim or silently dropping the
+attempt from the record.
+
+### Verification
+
+`npm run lint` (clean), `npx tsc --noEmit` (clean), `npm run build`
+(clean, API stopped -- `/calculator` unaffected by the new portfolio
+code path, still fully dynamic). Manually verified against a running
+`uvicorn` + `next dev` pair: two live Portfolio runs against the real
+21-card catalog (both producing correct recommendations, frontier
+values, robustness percentages, and the 8-card exclusion list with
+accurate reasons matching known engine gaps), the classification badge
+fix (`NOT_MATERIAL` rendering correctly once added), and a desktop-only
+visual check of the full result stack (recommended portfolio, frontier
+chart, size-recommendation checklist, classification, excluded-cards
+disclosure) -- see the mobile note above for what wasn't completed.
+Python suite unaffected (no `compute/` changes): still 458 passed, 1
+skipped.
