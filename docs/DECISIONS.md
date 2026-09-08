@@ -5457,4 +5457,47 @@ strengthened to cross-check `source_id` against the bundle file at
 publish time (not just `reviewer_status`), which would have caught
 this class of corruption automatically. Not built in this pass --
 flagged for a future session, since fixing it now would be scope creep
-on top of an already-eventful publish step.
+on top of an already-eventful publish step. Spun off as a background
+task immediately after this entry (`task_7785386b`); Satya started it
+in a separate session -- being built independently of this one.
+
+### 159. Batch complete -- `prime_psb`/`prime_ktb` published, all 6
+PRIME-family cards (base + 5 co-brands) now live
+
+Satya reviewed and approved the remaining 7 source_links (1 for
+`prime_psb`'s `accelerated_10pt`, 6 for `prime_ktb`) in Supabase, then
+said "reviewed. publish." Before running `ingest publish`, re-ran the
+FULL cross-check from #158 one more time as cheap insurance given what
+was just found there -- verified all 45 links across all 5 cards are
+both correctly cited (`source_id` resolves to the URL the bundle's own
+`_source` field names) AND `approved`, zero problems, before touching
+publish at all this time (not just checking the review-queue count,
+which alone would have missed #158's kind of corruption again).
+
+`ingest publish` ran clean for both `prime_psb` and `prime_ktb` --
+goldens passed exactly, both now `status='published'`,
+`effective_to=NULL`, confirmed via a direct DB query alongside the
+other three (`prime_bom`, `prime_uco`, `prime_cub`) and base
+`prime_sbi` -- all six PRIME-family cards live simultaneously.
+
+**Batch verdict, final**: 5/5 co-brand cards published, matching this
+batch's own success criterion exactly. The "PRIME family = same
+structure, different fees" hypothesis this batch set out to test did
+NOT hold in the way expected -- every co-brand card turned out
+identical to base PRIME in BOTH structure AND fee numbers, with only
+cosmetic/documentation-structure differences (citation path for the
+e-wallet exclusion on 3 of the 5, a Welcome Gift voucher-partner name,
+Karnataka's own explicit "eligible year" definition) and zero economic
+divergence. Every published card carries the same NACV as base PRIME
+(Rs.5,700.24 steady-state / Rs.2,161.42 year-1) for the proposed
+golden scenario. The one real problem the batch surfaced wasn't in any
+card's own content -- it was 3 corrupted `source_links` rows (#158),
+found only because this batch's own verification cross-checked DB
+state against bundle files directly rather than trusting `ingest
+review-queue`'s status count alone.
+
+### Verification
+
+Full suite re-run after both publishes: expected 437/437 green + 1
+skipped, unchanged (publishing touches only `card_versions`/
+`source_links` status in the DB, no engine or test code).
