@@ -377,9 +377,17 @@ Restating CLAUDE.md's own rules as they bind this layer specifically:
    flagged. Verified against `TestClient` (8 new tests) and a real
    running server against the live catalog (`GET /cards/prime_sbi`
    rendered correctly).
-2. **Slice 2**: Catalog screen against Slice 1. No forms, no mutations,
-   no auth — good first slice to stand up the Next.js project itself and
-   validate the stack choice (F.5) before investing in heavier screens.
+2. **Slice 2 — DONE (2026-09-08, docs/DECISIONS.md #164)**: the Catalog
+   screen — `web/`, Next.js + TypeScript + Tailwind (matching the
+   approved stack), card-list + card-detail pages, both Server
+   Components fetching directly from Slice 1's endpoints (`src/lib/
+   api.ts`, hand-typed to mirror `app/schemas.py`). Two real bugs found
+   by looking at the actual rendered page, not assumed away: the
+   scaffold's own dark-mode CSS flip made text illegible (removed —
+   light-themed only for now), and Next's stock 404 page broke the
+   site's own visual language (replaced with `not-found.tsx`). Clean
+   `lint`/`tsc --noEmit`/`build`, plus manual browser verification
+   against the live 21-card catalog and a mobile viewport check.
 3. **Slice 3**: Calculator, single-card mode (`/evaluate`) — smaller than
    portfolio mode, exercises the spend-input form once before Slice 4
    reuses it. Still no auth (public, per F.6).

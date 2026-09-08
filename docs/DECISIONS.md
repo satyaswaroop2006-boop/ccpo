@@ -5833,3 +5833,99 @@ prior tests unaffected, +19 new (5 `test_api_cards.py` + 14 in `test_
 postgres_repository.py` -- the 12-card parametrized cross-check counts
 as 12 separate cases, not 1, plus the 2 non-parametrized additions).
 Confirmed: 458 passed, 1 skipped (was 439 + 1 before this slice).
+
+---
+
+## 2026-09-08 -- Part F Slice 2 built: the Catalog screen, `web/`
+scaffolded
+
+### 164. First frontend code in this repo -- Next.js + TypeScript +
+Tailwind at `web/`, two Server Components against Slice 1's endpoints
+
+Asked to build Slice 2 (F.8). Scaffolded `web/` via `create-next-app`
+with the exact stack #160 already decided (Next.js, TypeScript,
+Tailwind for fast/decent styling -- not itself a §F.10 decision, just
+an implementation detail for a minimal but presentable UI matching the
+"real public product" direction). `src/lib/api.ts` hand-types
+`CardSummary`/`CardDetail` mirroring `app/schemas.py`'s own Pydantic
+models field-for-field (per F.5's own "hand-written, cheap at this
+size" call) -- server-only (`API_BASE_URL`, no `NEXT_PUBLIC_` prefix),
+so `compute/`'s address never reaches the client bundle. Both pages
+(`/` list, `/cards/[card_key]` detail) are React Server Components:
+the fetch to `compute/` happens server-side, so the page ships
+pre-rendered HTML -- no client-side loading spinner needed for the
+common case, and real SSR for the public catalog (the exact reason
+#160 chose Next.js over a plain Vite SPA in the first place, now
+actually exercised for the first time).
+
+**Two real bugs found by looking at the actual rendered page in a
+browser, not assumed away from reading the code**:
+  1. `create-next-app`'s own scaffolded `globals.css` flips to a dark
+     background (`#0a0a0a`) under `prefers-color-scheme: dark` while
+     every component here uses light-mode Tailwind classes (`text-
+     neutral-900` etc.) -- produced near-illegible dark-grey-on-black
+     text for anyone with a dark OS theme. Fixed by removing the
+     dark-mode flip entirely rather than patching every component with
+     `dark:` variants -- a real dark theme is a deliberate design pass
+     for a later slice (F.10 never decided one), not something to
+     half-build by accident via a leftover template default.
+  2. Next.js's own default `not-found` page ships its own (dark)
+     styling independent of this app's `globals.css` -- visually broke
+     the theme the instant a card lookup 404'd. Fixed with a real
+     `web/src/app/not-found.tsx` matching the site's own light theme,
+     covering both a bad route and `notFound()` calls from the card
+     detail page alike.
+
+**A third thing investigated and ruled OUT, not silently accepted**:
+screenshots taken after scrolling a tall detail page showed a large
+blank gap above the "Caps" section that `getBoundingClientRect()` and
+`get_page_text` both independently proved didn't exist in the actual
+DOM/layout. Chased via several diagnostics (nested-scroll-container
+check, a `<html class="h-full">` removal -- a real, worthwhile
+simplification kept regardless, since forcing `html` to a fixed
+viewport-height box is a known footgun even though it wasn't THIS
+bug's cause -- and finally a full-page-height viewport resize that
+rendered perfectly with zero scrolling needed). Concluded: an artifact
+of the Browser tool's own scrolled-screenshot capture, not a real
+defect -- confirmed conclusively rather than assumed, before writing
+this off.
+
+**A fourth, genuinely operational bug found**: `npm run build` with
+`compute/`'s API stopped failed HARD (`TypeError: fetch failed`,
+`ECONNREFUSED`, non-zero exit) rather than building successfully --
+Next.js tries to statically prerender `/` at BUILD time by default
+(no dynamic route segments on the catalog page), so the frontend
+build itself silently depended on the backend being reachable. A real
+deployment-order footgun: any CI/CD pipeline building `web/` before
+`compute/` is live would fail outright. Fixed with `export const
+dynamic = "force-dynamic"` on the catalog page -- renders per-request
+instead of at build time, while `listCards()`'s own `next: {
+revalidate: 60 }` fetch option keeps the underlying data cache
+behavior (this trades away build-time static HTML, not the caching).
+Verified by re-running `npm run build` with the API deliberately still
+stopped: clean build, `/` now marked dynamic (`ƒ`) instead of static
+(`○`).
+
+### Verification
+
+`npm run lint` (clean), `npx tsc --noEmit` (clean), `npm run build` run
+TWICE -- once with the API up (clean) and once with it deliberately
+stopped (also clean, after the `force-dynamic` fix above; `/` and
+`/cards/[card_key]` both marked dynamic, server-rendered on demand, no
+build-time API dependency left). Manually
+verified against both a running `uvicorn` instance and `next dev`
+together: the Catalog list renders all 21 live cards (9 real + 12
+synthetic) with correct fees; `Bank of Maharashtra SBI Card PRIME`'s
+detail page renders its full, correct rule breakdown (10pt/2pt earning
+rules, the 7,500 cap, the Rs.3L fee waiver, both exclusions, both
+benefits) -- cross-checked against this session's own PRIME-family
+ingestion work; an unknown card_key renders the new on-brand 404, not
+Next's stock one; mobile viewport (375x812) checked, single-column,
+legible. No automated frontend test suite added this slice -- Part F
+§F.8's own working-style note ("adapted from golden scenario to
+screenshot + a worked example, since there's no golden-JSON equivalent
+for a UI screen") already anticipates manual browser verification as
+this project's own bar for a UI slice; Slice 1's `compute/` change
+still got full `pytest` coverage (#163), unaffected by this entry.
+Python suite unaffected by this entry (no `compute/` changes): still
+458 passed, 1 skipped.

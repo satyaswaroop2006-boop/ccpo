@@ -348,9 +348,33 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       — directly motivated by #158/#161's source_links corruption
       incident (the Review UI's write path is structurally narrow:
       Approve/Reject can only ever touch `reviewer_status`, never
-      `source_id`). Document is ready for a final read-through; no
-      frontend or new `compute/` code written yet — Slice 1 of its own
-      7-slice build order (F.8) hasn't started.
+      `source_id`). **Approved (v0.3, #162)** after a final read-through
+      caught a real gap the concurrent publish-gate session's own changes
+      introduced (`ingest.publish`'s `bundle_path` requirement has
+      nothing in the schema to supply it from an API endpoint —
+      flagged as a Slice 7 prerequisite, not a blocker for Slices 1-6).
+      **Slice 1 done** (#163): `GET /cards`/`GET /cards/{key}` — needed
+      a genuinely separate `CardSummary` read path, since `CardRuleBundle`
+      (an engine dataclass) carries no display metadata by design; the
+      detail endpoint's rule breakdown uses a generic recursive
+      dataclass serializer (`app/schemas.py::_jsonable`) rather than
+      ~10 hand-written Pydantic models, to avoid hand-duplicating Part
+      C's own vocabulary a second time. **Slice 2 done** (#164): the
+      Catalog screen itself — `web/`, a real Next.js + TypeScript +
+      Tailwind project (per the approved stack decision), a card-list
+      page and a card-detail page, both Server Components fetching
+      directly from Slice 1's endpoints, no client-side JS needed for
+      the common case. Two real bugs found and fixed while eyeballing
+      the actual rendered page, not assumed away: the scaffold's own
+      dark-mode CSS variable flip made every page illegible against a
+      light-mode text palette (removed — Slice 2 is deliberately
+      light-themed only), and a stock Next.js 404 page that visually
+      broke the site's own theme (replaced with an on-brand
+      `not-found.tsx`). Verified via `npm run lint`/`tsc --noEmit`/
+      `npm run build` (all clean) plus manual browser verification
+      against the live catalog (21 real+synthetic cards render
+      correctly; mobile viewport checked). Slices 3-7 (Calculator,
+      auth, Ingestion Review, Publish) not started.
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
 change per stage: normalise → eligibility → match → accrue → caps →
@@ -381,6 +405,9 @@ cd compute && pytest            # unit + golden battery
 
 # api (from Phase 3)
 cd compute && uvicorn app.main:app --reload
+
+# frontend (from Phase 6, Part F Slice 2) -- needs the api running too
+cd web && npm run dev
 ```
 
 Local dev note: the migration references Supabase's `auth` schema. For a
