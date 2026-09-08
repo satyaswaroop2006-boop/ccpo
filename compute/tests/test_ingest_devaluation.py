@@ -125,6 +125,12 @@ def _approve_everything(conn, card_version_id) -> None:
         )
 
 
+def _write_bundle(tmp_path: Path, data: dict, name: str) -> str:
+    path = tmp_path / name
+    path.write_text(json.dumps(data))
+    return str(path)
+
+
 def _write_golden(tmp_path: Path, rate: float, name: str) -> str:
     # grocery ticket 700, 700*rate lands exact for 0.01/0.02 -> no rounding_estimated.
     # gross = 1,20,000*rate. fee unwaived: steady_fee=590.00.
@@ -171,10 +177,12 @@ class _ForceRollback(Exception):
 
 
 def _link_approve_publish_v1(conn, tmp_path):
-    result1 = link_bundle(_bundle(rate=0.01, effective_from="2026-01-01"), conn)
+    bundle1 = _bundle(rate=0.01, effective_from="2026-01-01")
+    result1 = link_bundle(bundle1, conn)
     _approve_everything(conn, result1.card_version_id)
     golden1 = _write_golden(tmp_path, 0.01, "v1.json")
-    publish1 = publish_card_version(conn, result1.card_version_id, [golden1])
+    bundle_path1 = _write_bundle(tmp_path, bundle1, "bundle_v1.json")
+    publish1 = publish_card_version(conn, result1.card_version_id, [golden1], bundle_path1)
     return result1, publish1
 
 
@@ -222,11 +230,13 @@ def test_full_devaluation_cycle_closes_out_the_predecessor_on_publish(conn, issu
             result1, publish1 = _link_approve_publish_v1(conn, tmp_path)
             assert publish1.superseded_version_id is None
 
-            result2 = link_bundle(_bundle(rate=0.02, effective_from="2026-06-01", source_url=SOURCE_URL_V2), conn, new_version=True)
+            bundle2 = _bundle(rate=0.02, effective_from="2026-06-01", source_url=SOURCE_URL_V2)
+            result2 = link_bundle(bundle2, conn, new_version=True)
             _approve_everything(conn, result2.card_version_id)
             golden2 = _write_golden(tmp_path, 0.02, "v2.json")
+            bundle_path2 = _write_bundle(tmp_path, bundle2, "bundle_v2.json")
 
-            publish2 = publish_card_version(conn, result2.card_version_id, [golden2])
+            publish2 = publish_card_version(conn, result2.card_version_id, [golden2], bundle_path2)
             assert publish2.superseded_version_id == result1.card_version_id
 
             with conn.cursor() as cur:
