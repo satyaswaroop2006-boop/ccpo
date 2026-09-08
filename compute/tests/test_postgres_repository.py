@@ -75,6 +75,37 @@ def test_unknown_card_raises_card_not_found(pg_repo):
         pg_repo.get_card_bundle("not_a_real_card")
 
 
+def test_unknown_card_summary_raises_card_not_found(pg_repo):
+    with pytest.raises(CardNotFoundError):
+        pg_repo.get_card_summary("not_a_real_card")
+
+
+def test_list_card_summaries_covers_the_full_live_catalog(pg_repo):
+    """Part F §F.2.1's Catalog list, against the real DB -- catches
+    anything the synthetic-only tests/test_api_cards.py can't (the `cards`/
+    `issuers` join, real cards published this repo's own Phase 5 sessions
+    alongside the 12 synthetic fixtures)."""
+    summaries = pg_repo.list_card_summaries()
+    keys = {s.card_key for s in summaries}
+    assert {c["key"] for c in CARDS} <= keys  # every synthetic fixture present; real cards may add more
+
+
+@pytest.mark.parametrize("card", CARDS, ids=lambda c: c["key"])
+def test_postgres_card_summary_matches_synthetic_card_summary(pg_repo, syn_repo, card):
+    key = card["key"]
+    pg_summary = pg_repo.get_card_summary(key)
+    syn_summary = syn_repo.get_card_summary(key)
+
+    assert pg_summary.name == syn_summary.name
+    assert pg_summary.issuer_name == syn_summary.issuer_name
+    assert pg_summary.network == syn_summary.network
+    assert pg_summary.tier == syn_summary.tier
+    assert pg_summary.segment == syn_summary.segment
+    assert pg_summary.joining_fee == syn_summary.joining_fee
+    assert pg_summary.annual_fee == syn_summary.annual_fee
+    assert pg_summary.currency_key == syn_summary.currency_key
+
+
 @pytest.mark.parametrize("card", CARDS, ids=lambda c: c["key"])
 def test_postgres_bundle_matches_synthetic_bundle(pg_repo, syn_repo, card):
     key = card["key"]

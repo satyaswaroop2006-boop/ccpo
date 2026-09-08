@@ -31,6 +31,8 @@ from app.repository import (  # noqa: E402
 )
 from app.schemas import (  # noqa: E402
     CardClassificationOut,
+    CardDetailOut,
+    CardSummaryOut,
     EvaluateRequest,
     EvaluateResponse,
     ExcludedCardOut,
@@ -91,6 +93,29 @@ def get_repository() -> CardRepository:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "engine": "phase 2 (11 stages + breakpoints), phase 3 (/evaluate, /next-best-spend), phase 4 (/optimise)"}
+
+
+@app.get("/cards", response_model=list[CardSummaryOut])
+def list_cards(repository: CardRepository = Depends(get_repository)) -> list[CardSummaryOut]:
+    """Part F §F.2.1's Catalog screen, Slice 1 (F.8) -- public, no auth, no
+    math: a thin wrapper over `CardRepository.list_card_summaries()`.
+    Ordered by `card_key` (both repository implementations' own query/list
+    order already), not re-sorted here."""
+    return [CardSummaryOut.from_summary(s) for s in repository.list_card_summaries()]
+
+
+@app.get("/cards/{card_key}", response_model=CardDetailOut)
+def get_card(card_key: str, repository: CardRepository = Depends(get_repository)) -> CardDetailOut:
+    """Part F §F.2.1's Catalog detail view -- the summary row plus the
+    full rule breakdown read straight off the same `CardRuleBundle`
+    `/evaluate` and `/optimise` already load a card into (`_jsonable`,
+    `app/schemas.py`), not a second translation of it."""
+    try:
+        summary = repository.get_card_summary(card_key)
+        bundle = repository.get_card_bundle(card_key)
+    except CardNotFoundError:
+        raise HTTPException(status_code=404, detail=f"unknown card_key {card_key!r}")
+    return CardDetailOut.from_summary_and_bundle(summary, bundle)
 
 
 @app.post("/evaluate", response_model=EvaluateResponse)

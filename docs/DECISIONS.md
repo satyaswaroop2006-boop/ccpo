@@ -5738,3 +5738,98 @@ already exist, not just the list one).
 may begin. No frontend or `compute/` code written this entry; this was
 verification-only, closing the loop v0.1 opened ("no frontend code
 follows until a final full read-through is confirmed").
+
+---
+
+## 2026-09-08 -- Part F Slice 1 built: `GET /cards`, `GET /cards/{key}`
+
+### 163. Catalog read endpoints -- a genuinely SECOND read path, not a
+reuse of `CardRuleBundle`
+
+Asked to build Slice 1 (F.8). First finding, before writing any
+endpoint code: `CardRuleBundle` (`engine/card_bundle.py`) -- what
+`CardRepository.get_card_bundle`/`get_all_card_bundles` already return,
+and what Part F's own v0.1 draft assumed the Catalog screen could read
+straight from -- carries no `name`/`issuer`/`network`/`tier`/`segment`
+at all. `bundle_from_dict` discards those fields from the raw card dict
+on the way in; entirely correct for an ENGINE dataclass (Stages 2-10
+have no use for a display name), but it means Part F's own F.2.1
+("List of published cards: name, issuer, network...") needs a genuinely
+separate read path, not a reuse of the existing one. `_fetch_card_dict`
+(`app/repository.py`) already SELECTs `name`/`network`/`tier`/`segment`
+from Postgres for `bundle_from_dict`'s own input dict -- just never
+surfaces them past that point.
+
+**Built**: a new `CardSummary` dataclass + `CardRepository.list_card_
+summaries()`/`get_card_summary()`, implemented on both repositories
+(`SyntheticCatalogRepository` reads the same `CARDS`/`ISSUER` dict
+Slice comparisons already use; `PostgresCardRepository` gained a new
+`cards JOIN issuers JOIN current_card_versions JOIN reward_currencies`
+query -- `issuers` wasn't joined by ANY existing query before this,
+another genuinely new read, not an extension of `_fetch_card_dict`'s
+own join set, since that query has no reason to know issuer names).
+`GET /cards` wraps the list; `GET /cards/{key}` wraps both the summary
+and `get_card_bundle` together into `CardDetailOut` -- the full rule
+breakdown via a new `_jsonable()` helper (`app/schemas.py`) that
+recursively serializes any engine rule dataclass generically (field
+names read via `dataclasses.fields`, not hand-copied), rather than
+hand-writing ~10 Pydantic models mirroring `EarningRule`/`Cap`/
+`Threshold`/`Exclusion`/`Benefit`/`Surcharge` and everything they nest
+-- avoids exactly the "hand-duplicated schema, drifts silently" problem
+Part F's own F.5 flagged as a reason to generate TypeScript types from
+the OpenAPI schema rather than hand-write those too, applied one layer
+earlier.
+
+**A real bug caught by the endpoint's own test, not a design decision**:
+`EarningRule` has no `accrual` field at all -- Stage 4 looks it up
+separately from `bundle.accruals[rule.key]` (the same split `evaluate_
+card`'s own Stage 3-4 boundary already uses). The first version of
+`CardDetailOut.from_summary_and_bundle` serialized `earning_rules`
+directly via `_jsonable`, producing a rule with no rate information at
+all -- `test_get_card_detail_includes_summary_and_rule_breakdown`
+caught this immediately (`KeyError: 'accrual'` on the assertion, not a
+silent wrong answer) before it reached a report. Fixed by merging each
+rule's own accrual into its own dict entry -- a display view naturally
+wants a rule and its rate together, one hop `evaluate_card`'s own
+internals don't need but a renderer would otherwise have to redo itself.
+
+**`.claude/launch.json` added** (new to this repo) so `GET /cards` could
+be checked against a REAL running server, not just `TestClient` --
+`--env-file compute/.env` was needed since `uvicorn`'s own `--app-dir`
+flag doesn't change the process's working directory, so `app/main.py`'s
+own `load_dotenv()` (no path given) wouldn't otherwise find `compute/
+.env` from wherever the process actually launches. First attempt without
+it silently fell back to `SyntheticCatalogRepository` (`DATABASE_URL`
+genuinely unset in that process's environment) -- caught by the
+response's own card ORDER (`CARDS`' own declaration order, not
+alphabetical `ORDER BY key`), not a crash, so worth naming as a real
+near-miss: an unnoticed silent-fallback verification would have "passed"
+against the wrong repository entirely.
+
+### Verification
+
+`tests/test_api_cards.py` (5 tests, `TestClient` + `SyntheticCatalog
+Repository`, same pinning convention as `test_api_evaluate.py` per #67):
+list completeness, summary field values against `syn_flat`'s own known
+dict, 404 on an unknown key, detail rule-breakdown fields (including the
+accrual-merge fix above), and nested-dataclass serialization against
+`syn_ecom`'s own cap/threshold (`Window`/`Payload`/`Tier` all reached,
+not just the top-level rule list). `tests/test_postgres_repository.py`
+gained 3 more (unknown-key 404, full-catalog coverage, and a 12-card
+parametrized cross-check that `PostgresCardRepository.get_card_summary`
+agrees with `SyntheticCatalogRepository.get_card_summary` field-by-
+field) -- run for real against the live database (`DATABASE_REACHABLE`
+was true), all 14 total Postgres-path tests passing. Manually verified
+against a live `uvicorn` instance per this repo's own working-style
+rule: `GET /cards` against the REAL catalog returns all 21 live cards
+(9 real + 12 synthetic, alphabetically ordered -- confirming the
+Postgres path, not synthetic fallback); `GET /cards/prime_sbi` renders
+the full, correct rule breakdown for a real published card (accelerated_
+10pt/base_2pt rates, the 7,500pt cap, the Rs.3L waiver, both benefits --
+cross-checked by eye against what this session's own PRIME-family
+ingestion work already knows about this card); 404 confirmed against
+the live server too, not just `TestClient`. Full suite: expected all
+prior tests unaffected, +19 new (5 `test_api_cards.py` + 14 in `test_
+postgres_repository.py` -- the 12-card parametrized cross-check counts
+as 12 separate cases, not 1, plus the 2 non-parametrized additions).
+Confirmed: 458 passed, 1 skipped (was 439 + 1 before this slice).

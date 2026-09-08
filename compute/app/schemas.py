@@ -7,12 +7,15 @@ methods to build those engine dataclasses. No rupee math happens here
 """
 from __future__ import annotations
 
+from dataclasses import fields, is_dataclass
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.repository import CardSummary
 from engine.assemble import NACVResult, TraceLine
+from engine.card_bundle import CardRuleBundle
 from engine.evaluate import EvaluateAssumptions, EvaluateResult
 from engine.normalise import CategorySpend, SpendInput
 from optimiser.candidates import (
@@ -261,6 +264,93 @@ class RobustnessOut(BaseModel):
     @classmethod
     def from_robustness(cls, r: PortfolioRobustness) -> "RobustnessOut":
         return cls(v_expected=r.v_expected, v_low=r.v_low, v_high=r.v_high, robustness=r.robustness, rank_stable=r.rank_stable)
+
+
+class CardSummaryOut(BaseModel):
+    """Part F §F.2.1's Catalog list row -- one per published card."""
+
+    card_key: str
+    name: str
+    issuer_name: str
+    network: str
+    tier: str | None
+    segment: str | None
+    joining_fee: Decimal
+    annual_fee: Decimal
+    currency_key: str
+
+    @classmethod
+    def from_summary(cls, s: CardSummary) -> "CardSummaryOut":
+        return cls(
+            card_key=s.card_key, name=s.name, issuer_name=s.issuer_name, network=s.network,
+            tier=s.tier, segment=s.segment, joining_fee=s.joining_fee, annual_fee=s.annual_fee,
+            currency_key=s.currency_key,
+        )
+
+
+def _jsonable(value: Any) -> Any:
+    """Recursively turns an engine rule dataclass (`EarningRule`, `Cap`,
+    `Threshold`, `Exclusion`, `Benefit`, `Surcharge`, and everything they
+    nest -- `Selector`, `Accrual`, `Window`, `Payload`, `Tier`, ...) into a
+    plain JSON-safe structure, field-for-field, with no field list
+    hand-duplicated here. Part F §F.2.1's own framing for the Catalog
+    detail view: "a direct, formatted dump of the rule vocabulary Part C
+    defines, not a new summarization layer" -- hand-mirroring each of
+    these ~10 dataclasses into its own Pydantic model would BE a second
+    copy of that vocabulary, with its own drift risk every time an engine
+    dataclass gains a field; this has none, by construction. Decimal ->
+    str (not float) to stay exact, matching CLAUDE.md rule 5's "Decimal
+    for money" discipline all the way to the wire, not just up to the API
+    boundary."""
+    if is_dataclass(value) and not isinstance(value, type):
+        return {f.name: _jsonable(getattr(value, f.name)) for f in fields(value)}
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (tuple, list)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    return value
+
+
+class CardDetailOut(CardSummaryOut):
+    """Part F §F.2.1's Catalog detail view: the summary row plus the full
+    rule breakdown, straight off `CardRuleBundle` -- the same object
+    `/evaluate` and `/optimise` already load a card into, not a second
+    translation of it. Each `earning_rules[]` entry has its own `accrual`
+    merged in even though `EarningRule` itself carries no such field
+    (Stage 4 looks it up separately from `bundle.accruals[rule.key]`,
+    same split `evaluate_card`'s own Stage 3-4 boundary already uses) --
+    a display view naturally wants a rule and its rate together, so this
+    denormalises the one hop a renderer would otherwise have to redo
+    itself, discovered by this endpoint's own test."""
+
+    earning_rules: list[dict[str, Any]]
+    caps: list[dict[str, Any]]
+    thresholds: list[dict[str, Any]]
+    exclusions: list[dict[str, Any]]
+    benefits: list[dict[str, Any]]
+    surcharges: list[dict[str, Any]]
+
+    @classmethod
+    def from_summary_and_bundle(cls, s: CardSummary, bundle: CardRuleBundle) -> "CardDetailOut":
+        earning_rules = []
+        for rule in bundle.earning_rules:
+            rule_out = _jsonable(rule)
+            rule_out["accrual"] = _jsonable(bundle.accruals[rule.key])  # not on EarningRule itself -- see class docstring
+            earning_rules.append(rule_out)
+
+        return cls(
+            card_key=s.card_key, name=s.name, issuer_name=s.issuer_name, network=s.network,
+            tier=s.tier, segment=s.segment, joining_fee=s.joining_fee, annual_fee=s.annual_fee,
+            currency_key=s.currency_key,
+            earning_rules=earning_rules,
+            caps=[_jsonable(c) for c in bundle.caps],
+            thresholds=[_jsonable(t) for t in bundle.thresholds],
+            exclusions=[_jsonable(e) for e in bundle.exclusions],
+            benefits=[_jsonable(b) for b in bundle.benefits.values()],
+            surcharges=[_jsonable(sc) for sc in bundle.surcharges],
+        )
 
 
 class OptimiseResponse(BaseModel):

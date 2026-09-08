@@ -365,9 +365,18 @@ Restating CLAUDE.md's own rules as they bind this layer specifically:
 
 # F.8 Build order (proposed slices, mirroring Phase 2–5's incremental discipline)
 
-1. **Slice 1**: the `GET /cards`, `GET /cards/{key}` endpoints + tests —
-   pure `compute/` work, no frontend, no auth needed yet (public). Smallest
-   possible first slice.
+1. **Slice 1 — DONE (2026-09-08, docs/DECISIONS.md #163)**: the
+   `GET /cards`, `GET /cards/{key}` endpoints + tests — pure `compute/`
+   work, no frontend, no auth (public). Found along the way: `CardRuleBundle`
+   carries no display metadata at all (by design — it's an engine
+   dataclass), so this needed a genuinely separate `CardSummary` read
+   path, not a reuse of `get_card_bundle`; the detail endpoint's rule
+   breakdown is a generic recursive dataclass serializer
+   (`app/schemas.py::_jsonable`), not ~10 hand-written Pydantic models,
+   to avoid the same hand-duplicated-schema drift risk F.5 already
+   flagged. Verified against `TestClient` (8 new tests) and a real
+   running server against the live catalog (`GET /cards/prime_sbi`
+   rendered correctly).
 2. **Slice 2**: Catalog screen against Slice 1. No forms, no mutations,
    no auth — good first slice to stand up the Next.js project itself and
    validate the stack choice (F.5) before investing in heavier screens.

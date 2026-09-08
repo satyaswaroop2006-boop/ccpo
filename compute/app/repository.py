@@ -21,6 +21,7 @@ behind it. Two implementations:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
@@ -28,11 +29,33 @@ import psycopg
 
 from engine.card_bundle import CardRuleBundle, bundle_from_dict, currencies_from_dicts
 from engine.valuation import RewardCurrency
-from seeds.synthetic_cards import CARDS, CURRENCIES
+from seeds.synthetic_cards import CARDS, CURRENCIES, ISSUER
 
 
 class CardNotFoundError(KeyError):
     pass
+
+
+@dataclass(frozen=True)
+class CardSummary:
+    """Catalog DISPLAY metadata (Part F §F.2.1) -- deliberately separate
+    from `CardRuleBundle`, which is an ENGINE input (Stages 2-10's own
+    needs, per its own docstring) and carries no `name`/`issuer`/`network`
+    at all: `bundle_from_dict` discards those fields from the raw card
+    dict on the way in, by design (an engine dataclass has no business
+    knowing display strings). This is the other half of the same raw dict
+    (or DB row) `CardRuleBundle` is built from -- a second, thin read, not
+    a repurposing of the first."""
+
+    card_key: str
+    name: str
+    issuer_name: str
+    network: str
+    tier: str | None
+    segment: str | None
+    joining_fee: Decimal
+    annual_fee: Decimal
+    currency_key: str
 
 
 class CardRepository(Protocol):
@@ -41,6 +64,10 @@ class CardRepository(Protocol):
     def get_currencies(self) -> dict[str, RewardCurrency]: ...
 
     def get_all_card_bundles(self) -> list[CardRuleBundle]: ...
+
+    def list_card_summaries(self) -> list[CardSummary]: ...
+
+    def get_card_summary(self, card_key: str) -> CardSummary: ...
 
 
 class SyntheticCatalogRepository:
@@ -69,6 +96,30 @@ class SyntheticCatalogRepository:
         candidates.py::select_candidates` does its own ranking, so no
         ordering guarantee is needed here beyond determinism."""
         return [bundle_from_dict(c) for c in CARDS]
+
+    def list_card_summaries(self) -> list[CardSummary]:
+        return [_summary_from_dict(c) for c in CARDS]
+
+    def get_card_summary(self, card_key: str) -> CardSummary:
+        card = self._cards_by_key.get(card_key)
+        if card is None:
+            raise CardNotFoundError(card_key)
+        return _summary_from_dict(card)
+
+
+def _summary_from_dict(card: dict) -> CardSummary:
+    """Same raw-dict shape `bundle_from_dict` reads (`seeds/synthetic_
+    cards.py`'s own `CARDS` entries and `PostgresCardRepository._fetch_
+    card_dict`'s assembled dict both carry `name`/`network`/`tier`/
+    `segment` already, per that function's own docstring) -- this just
+    reads the OTHER fields off the same dict, never re-fetches anything."""
+    v = card.get("version", {})
+    return CardSummary(
+        card_key=card["key"], name=card["name"], issuer_name=ISSUER["name"],
+        network=card.get("network"), tier=card.get("tier"), segment=card.get("segment"),
+        joining_fee=Decimal(str(v.get("joining_fee", 0))), annual_fee=Decimal(str(v.get("annual_fee", 0))),
+        currency_key=card["currency"],
+    )
 
 
 class PostgresCardRepository:
@@ -112,6 +163,15 @@ class PostgresCardRepository:
         keys = _fetch_all_card_keys(self._conn)
         return [bundle_from_dict(_fetch_card_dict(self._conn, key)) for key in keys]
 
+    def list_card_summaries(self) -> list[CardSummary]:
+        return _fetch_all_card_summaries(self._conn)
+
+    def get_card_summary(self, card_key: str) -> CardSummary:
+        summary = _fetch_card_summary(self._conn, card_key)
+        if summary is None:
+            raise CardNotFoundError(card_key)
+        return summary
+
 
 def _fetch_all_card_keys(conn: psycopg.Connection) -> list[str]:
     with conn.cursor() as cur:
@@ -119,6 +179,37 @@ def _fetch_all_card_keys(conn: psycopg.Connection) -> list[str]:
             "select c.key from cards c join current_card_versions cv on cv.card_id = c.id order by c.key"
         )
         return [row[0] for row in cur.fetchall()]
+
+
+_SUMMARY_SELECT = (
+    "select c.key, c.name, i.name, c.network, c.tier, c.segment,"
+    " cv.joining_fee, cv.annual_fee, rc.key"
+    " from cards c"
+    " join issuers i on i.id = c.issuer_id"
+    " join current_card_versions cv on cv.card_id = c.id"
+    " join reward_currencies rc on rc.id = cv.currency_id"
+)
+
+
+def _summary_from_row(row: tuple) -> CardSummary:
+    key, name, issuer_name, network, tier, segment, joining_fee, annual_fee, currency_key = row
+    return CardSummary(
+        card_key=key, name=name, issuer_name=issuer_name, network=network, tier=tier, segment=segment,
+        joining_fee=Decimal(str(joining_fee)), annual_fee=Decimal(str(annual_fee)), currency_key=currency_key,
+    )
+
+
+def _fetch_all_card_summaries(conn: psycopg.Connection) -> list[CardSummary]:
+    with conn.cursor() as cur:
+        cur.execute(_SUMMARY_SELECT + " order by c.key")
+        return [_summary_from_row(row) for row in cur.fetchall()]
+
+
+def _fetch_card_summary(conn: psycopg.Connection, card_key: str) -> CardSummary | None:
+    with conn.cursor() as cur:
+        cur.execute(_SUMMARY_SELECT + " where c.key = %s", (card_key,))
+        row = cur.fetchone()
+        return _summary_from_row(row) if row is not None else None
 
 
 def _fetch_card_dict(conn: psycopg.Connection, card_key: str) -> dict | None:
