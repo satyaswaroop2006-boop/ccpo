@@ -5501,3 +5501,77 @@ review-queue`'s status count alone.
 Full suite re-run after both publishes: expected 437/437 green + 1
 skipped, unchanged (publishing touches only `card_versions`/
 `source_links` status in the DB, no engine or test code).
+
+---
+
+## 2026-09-08 -- docs/Part_F_Frontend_Architecture.md drafted (Phase 6 kickoff)
+
+### 160. Part F didn't exist -- stopped before writing any frontend code,
+per CLAUDE.md's own instruction; drafted and resolved via 5 direct
+decisions with Satya
+
+Asked to "start Phase 6," same posture as #103 (Part I): CLAUDE.md
+already marks this gap explicitly ("Phase 6 -- frontend (Part F, to be
+authored)"), and `docs/` confirmed to have no Part F file. Unlike #103,
+this wasn't a surprise -- CLAUDE.md itself flags it, and Part E §E.15 /
+Part I §I.11 both already contain forward pointers describing what Part
+F will eventually consume (the frontier table, classification set,
+marginal bands, trace ledgers per E.15; a proper `source_links` review
+UI superseding the CLI per I.11) -- written speculatively, before Part F
+existed as a document.
+
+Drafted `docs/Part_F_Frontend_Architecture.md` v0.1 as a first-cut
+proposal (mirroring Part I's own process), grounded in what already
+exists rather than invented: three screens (Catalog, Calculator,
+Ingestion Review) mapped directly to existing API response shapes
+(`app/schemas.py`'s `OptimiseResponse`/`EvaluateResponse` fields) and
+existing forward pointers, explicitly deferring wallet persistence,
+saved spend profiles, and run history (all schema-ready per Part D but
+never built, same deferrals Phase 3/4's own status notes already
+carry). The Ingestion Review screen was designed specifically to close
+the exact gap #158 (this same session, a few hours earlier) exposed:
+its write path is two narrow, single-purpose endpoints
+(approve/reject) that can only ever touch `reviewer_status` +
+`previous_rule_note`, never `source_id` -- a raw editable table (the
+proximate cause of #158's corruption) is structurally impossible to
+reproduce through this UI, not just discouraged.
+
+**Five genuinely open questions were left for Satya rather than
+decided unilaterally** (scope boundary, audience, tech stack, an auth
+gap discovered while drafting -- `app/main.py` has no auth today -- and
+whether publish should ever move into the UI given its irreversibility,
+Part D Decision 2). Resolved one at a time via `AskUserQuestion`, each
+answer changing the next question's own framing rather than being
+independent:
+
+1. **Scope**: narrow v1 (Catalog + Calculator + Ingestion Review),
+   nothing from the deferred list pulled forward.
+2. **Audience**: building toward a real public product, not staying an
+   internal tool -- this answer materially changed the recommended
+   answer to question 3 (see below), demonstrating why these were asked
+   one at a time rather than as a single batch.
+3. **Tech stack**: Next.js + TypeScript + Supabase Auth -- NOT the
+   React+Vite default originally proposed in v0.1 before question 2's
+   answer was known. Chosen because Next.js pairs with Supabase Auth's
+   own official integration patterns and gives the public Catalog page
+   real SSR/SEO, neither of which matters for an internal tool.
+4. **Auth**: real Supabase Auth wired up now (consistent with decision
+   3 already committing to it), but the Review/Publish endpoints
+   restricted to a single allow-listed account (Satya's) rather than a
+   general sign-up flow -- real plumbing intended to be reused when
+   public accounts eventually arrive, not a throwaway localhost-only
+   shortcut.
+5. **Publish**: a guarded Publish button ships in v1's Ingestion Review
+   screen (typed-confirmation gated, given irreversibility) rather than
+   staying CLI-only -- calls `ingest.publish`'s own existing gate-check
+   function directly (SS I.8), not a second implementation of it, so
+   the UI's and CLI's notion of "ready to publish" can never drift
+   apart.
+
+`docs/Part_F_Frontend_Architecture.md` updated to v0.2 reflecting all
+five decisions (F.1/F.5/F.6/F.7/F.2.3/F.3/F.8 all revised in place,
+F.10 converted from open questions to a decisions log). Document is
+otherwise ready for a final full read-through before Slice 1 (F.8's
+own build order, 7 slices) begins. No `compute/` or frontend code
+written this entry -- consistent with Part I's own precedent, the spec
+is approved (pending final read-through) before any code follows.
