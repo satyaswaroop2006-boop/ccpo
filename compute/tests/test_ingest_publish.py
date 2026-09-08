@@ -48,16 +48,20 @@ ISSUER_KEY = "zz_test_ingest_publish_issuer"
 CARD_KEY = "zz_test_ingest_publish_card"
 CURRENCY_KEY = "zz_test_ingest_publish_currency"
 SOURCE_URL = "https://example.test/zz-ingest-publish-mitc.pdf"
+# A URL never declared anywhere in this file's own bundle -- stands in for
+# "a wholly different card's document" (docs/DECISIONS.md #158's real
+# incident), used only by the source-provenance-mismatch test below.
+MISMATCH_SOURCE_URL = "https://example.test/zz-ingest-publish-unrelated-other-card-mitc.pdf"
 
 
 def _cleanup(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
-        cur.execute("delete from source_links where source_id in (select id from sources where url = %s)", (SOURCE_URL,))
+        cur.execute("delete from source_links where source_id in (select id from sources where url in (%s,%s))", (SOURCE_URL, MISMATCH_SOURCE_URL))
         cur.execute("delete from card_versions where card_id in (select id from cards where key = %s)", (CARD_KEY,))
         cur.execute("delete from cards where key = %s", (CARD_KEY,))
         cur.execute("delete from redemption_routes where currency_id in (select id from reward_currencies where key = %s)", (CURRENCY_KEY,))
         cur.execute("delete from reward_currencies where key = %s", (CURRENCY_KEY,))
-        cur.execute("delete from sources where url = %s", (SOURCE_URL,))
+        cur.execute("delete from sources where url in (%s,%s)", (SOURCE_URL, MISMATCH_SOURCE_URL))
         cur.execute("delete from issuers where key = %s", (ISSUER_KEY,))
     conn.commit()
 
@@ -139,6 +143,12 @@ def _write_golden(tmp_path: Path, data: dict, name: str = "golden.json") -> str:
     return str(path)
 
 
+def _write_bundle(tmp_path: Path, data: dict, name: str = "bundle.json") -> str:
+    path = tmp_path / name
+    path.write_text(json.dumps(data))
+    return str(path)
+
+
 def _link(conn):
     return link_bundle(_bundle(), conn)
 
@@ -161,7 +171,7 @@ def _approve_everything(conn, card_version_id) -> None:
 
 def test_publish_refuses_when_card_version_does_not_exist(conn):
     with pytest.raises(PublishError, match="does not exist"):
-        publish_card_version(conn, "00000000-0000-0000-0000-000000000000", [])
+        publish_card_version(conn, "00000000-0000-0000-0000-000000000000", [], "unused.json")
 
 
 def test_publish_refuses_on_an_already_published_card(conn):
@@ -176,23 +186,25 @@ def test_publish_refuses_on_an_already_published_card(conn):
         cv_id = cur.fetchone()[0]
 
     with pytest.raises(PublishError, match="not 'draft'"):
-        publish_card_version(conn, cv_id, [])
+        publish_card_version(conn, cv_id, [], "unused.json")
 
 
-def test_publish_refuses_when_no_golden_given(conn, issuer_id):
+def test_publish_refuses_when_no_golden_given(conn, issuer_id, tmp_path):
     result = _link(conn)
     _approve_everything(conn, result.card_version_id)
+    bundle_path = _write_bundle(tmp_path, _bundle())
 
     with pytest.raises(PublishError, match="no --golden path given"):
-        publish_card_version(conn, result.card_version_id, [])
+        publish_card_version(conn, result.card_version_id, [], bundle_path)
 
 
 def test_publish_refuses_when_source_links_not_all_approved(conn, issuer_id, tmp_path):
     result = _link(conn)  # fresh link -- everything defaults to 'unreviewed'
     golden_path = _write_golden(tmp_path, _MATCHING_GOLDEN)
+    bundle_path = _write_bundle(tmp_path, _bundle())
 
     with pytest.raises(PublishError, match="not approved"):
-        publish_card_version(conn, result.card_version_id, [golden_path])
+        publish_card_version(conn, result.card_version_id, [golden_path], bundle_path)
 
     with conn.cursor() as cur:
         cur.execute("select status from card_versions where id = %s", (result.card_version_id,))
@@ -206,6 +218,7 @@ def test_publish_refuses_when_only_the_currency_is_unapproved(conn, issuer_id, t
     alone still blocks publish."""
     result = _link(conn)
     golden_path = _write_golden(tmp_path, _MATCHING_GOLDEN)
+    bundle_path = _write_bundle(tmp_path, _bundle())
 
     with conn.cursor() as cur:
         cur.execute(
@@ -216,7 +229,7 @@ def test_publish_refuses_when_only_the_currency_is_unapproved(conn, issuer_id, t
     conn.commit()
 
     with pytest.raises(PublishError, match="reward_currency.*not approved") as exc_info:
-        publish_card_version(conn, result.card_version_id, [golden_path])
+        publish_card_version(conn, result.card_version_id, [golden_path], bundle_path)
     assert "redemption_route" in str(exc_info.value)  # both flagged, not just the currency itself
 
     with conn.cursor() as cur:
@@ -228,9 +241,10 @@ def test_publish_refuses_when_no_golden_scenario_passes(conn, issuer_id, tmp_pat
     result = _link(conn)
     _approve_everything(conn, result.card_version_id)
     golden_path = _write_golden(tmp_path, _MISMATCHED_GOLDEN)
+    bundle_path = _write_bundle(tmp_path, _bundle())
 
     with pytest.raises(PublishError, match="no passing golden scenario"):
-        publish_card_version(conn, result.card_version_id, [golden_path])
+        publish_card_version(conn, result.card_version_id, [golden_path], bundle_path)
 
 
 def test_publish_refuses_when_db_state_has_drifted_from_what_lint_validated(conn, issuer_id, tmp_path):
@@ -241,6 +255,7 @@ def test_publish_refuses_when_db_state_has_drifted_from_what_lint_validated(conn
     result = _link(conn)
     _approve_everything(conn, result.card_version_id)
     golden_path = _write_golden(tmp_path, _MATCHING_GOLDEN)
+    bundle_path = _write_bundle(tmp_path, _bundle())
 
     with conn.cursor() as cur:
         # networks is a genuinely unsupported selector field (Phase 5 Task
@@ -254,20 +269,75 @@ def test_publish_refuses_when_db_state_has_drifted_from_what_lint_validated(conn
     conn.commit()
 
     with pytest.raises(PublishError, match="cannot be matched against"):
-        publish_card_version(conn, result.card_version_id, [golden_path])
+        publish_card_version(conn, result.card_version_id, [golden_path], bundle_path)
+
+
+def test_publish_refuses_when_a_source_link_points_at_a_different_entitys_document(conn, issuer_id, tmp_path):
+    """docs/DECISIONS.md #158: mirrors the real incident found during the
+    PRIME-family batch ingestion -- an APPROVED source_links row whose
+    source_id has drifted to point at a wholly different, unrelated
+    document than the one this entity's own bundle declares. Check 1
+    (reviewer_status='approved') alone does not catch this; the new
+    provenance cross-check must."""
+    result = _link(conn)
+    _approve_everything(conn, result.card_version_id)
+    golden_path = _write_golden(tmp_path, _MATCHING_GOLDEN)
+    bundle_path = _write_bundle(tmp_path, _bundle())
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "insert into sources (url, source_type, issuer_id, title) values (%s, 'mitc', %s, 'Unrelated Other Card MITC') returning id",
+            (MISMATCH_SOURCE_URL, issuer_id),
+        )
+        other_source_id = cur.fetchone()[0]
+        cur.execute(
+            "update source_links set source_id = %s"
+            " where entity_type = 'earning_rule' and entity_id in"
+            "   (select id from earning_rules where card_version_id = %s and key = 'base')",
+            (other_source_id, result.card_version_id),
+        )
+    conn.commit()
+
+    with pytest.raises(PublishError, match="provenance mismatch") as exc_info:
+        publish_card_version(conn, result.card_version_id, [golden_path], bundle_path)
+    message = str(exc_info.value)
+    assert "earning_rule 'base'" in message
+    assert MISMATCH_SOURCE_URL in message
+    assert SOURCE_URL in message  # the URL the bundle actually declares, for the human fixing it
+
+    with conn.cursor() as cur:
+        cur.execute("select status from card_versions where id = %s", (result.card_version_id,))
+        assert cur.fetchone()[0] == "draft"  # refused before touching status
+
+
+def test_publish_refuses_when_bundle_path_does_not_match_the_linked_card(conn, issuer_id, tmp_path):
+    """A wrong --bundle path (e.g. copy-paste of a sibling card's file)
+    declares entities under keys the live DB doesn't have -- the
+    provenance check must refuse rather than silently skip entities it
+    can't find a bundle counterpart for."""
+    result = _link(conn)
+    _approve_everything(conn, result.card_version_id)
+    golden_path = _write_golden(tmp_path, _MATCHING_GOLDEN)
+    other_bundle = _bundle()
+    other_bundle["earning_rules"][0]["key"] = "totally_different_rule_key"
+    bundle_path = _write_bundle(tmp_path, other_bundle)
+
+    with pytest.raises(PublishError, match="no matching entity in the given --bundle file"):
+        publish_card_version(conn, result.card_version_id, [golden_path], bundle_path)
 
 
 def test_publish_succeeds_and_reports_scenario_results_without_leaving_a_permanent_published_row(conn, issuer_id, tmp_path):
     result = _link(conn)
     _approve_everything(conn, result.card_version_id)
     golden_path = _write_golden(tmp_path, _MATCHING_GOLDEN)
+    bundle_path = _write_bundle(tmp_path, _bundle())
 
     class _ForceRollback(Exception):
         pass
 
     with pytest.raises(_ForceRollback):
         with conn.transaction():  # publish_card_version's own transaction nests as a SAVEPOINT under this
-            publish_result = publish_card_version(conn, result.card_version_id, [golden_path])
+            publish_result = publish_card_version(conn, result.card_version_id, [golden_path], bundle_path)
 
             assert publish_result.card_key == CARD_KEY
             assert len(publish_result.scenario_results) == 1
@@ -297,13 +367,14 @@ def test_publish_accepts_a_multi_scenario_golden_file_needing_only_one_pass(conn
     result = _link(conn)
     _approve_everything(conn, result.card_version_id)
     golden_path = _write_golden(tmp_path, _MULTI_SCENARIO_GOLDEN)
+    bundle_path = _write_bundle(tmp_path, _bundle())
 
     class _ForceRollback(Exception):
         pass
 
     with pytest.raises(_ForceRollback):
         with conn.transaction():
-            publish_result = publish_card_version(conn, result.card_version_id, [golden_path])
+            publish_result = publish_card_version(conn, result.card_version_id, [golden_path], bundle_path)
             assert len(publish_result.scenario_results) == 2
             by_name = {r.scenario_name: r.passed for r in publish_result.scenario_results}
             assert by_name == {"scenario_wrong": False, "scenario_right": True}
