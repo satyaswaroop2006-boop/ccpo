@@ -313,7 +313,9 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       Fixed by hand (exact rows named, only `source_id` touched); all 6
       PRIME-family cards (base + 5 co-brands) now published (#159).
       **`ingest publish`'s gate hardened in direct response to #158**
-      (#160): a new fourth check, `_check_source_provenance_gate`
+      (#161 — renumbered during a merge with a concurrent Phase 6 kickoff
+      session that claimed #160 for `docs/Part_F_Frontend_Architecture.md`):
+      a new fourth check, `_check_source_provenance_gate`
       (`compute/ingest/publish.py`), cross-references every rule-level
       entity's live `source_links.source_id` against the URL its
       ORIGINAL BUNDLE FILE declares (not just `reviewer_status`), so the
@@ -332,7 +334,23 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       `prime_uco`, `prime_cub`, `prime_ktb`, `prime_psb` — plus all 12
       synthetic fixtures. Phase 5 remains open-ended (more real-card
       families still to ingest); not marked complete.
-- [ ] Phase 6 — frontend (Part F, to be authored)
+- [~] Phase 6 — frontend (Part F), in progress. `docs/Part_F_
+      Frontend_Architecture.md` v0.2 drafted and its five open scope/
+      stack/auth questions resolved directly with Satya (docs/
+      DECISIONS.md #160): narrow v1 (Catalog + Calculator + Ingestion
+      Review only, wallet/persistence/run-history all deferred), built
+      toward a real public product (not an internal-only tool), Next.js
+      + TypeScript + Supabase Auth (chosen over a plain Vite SPA
+      specifically because of the public-product decision), real
+      Supabase Auth wired up now but restricted to a single allow-listed
+      account, and a guarded Publish button in the Review UI calling
+      `ingest.publish`'s own existing gate rather than reimplementing it
+      — directly motivated by #158/#161's source_links corruption
+      incident (the Review UI's write path is structurally narrow:
+      Approve/Reject can only ever touch `reviewer_status`, never
+      `source_id`). Document is ready for a final read-through; no
+      frontend or new `compute/` code written yet — Slice 1 of its own
+      7-slice build order (F.8) hasn't started.
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
 change per stage: normalise → eligibility → match → accrue → caps →
