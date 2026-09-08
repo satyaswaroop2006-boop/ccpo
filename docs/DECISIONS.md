@@ -5929,3 +5929,85 @@ this project's own bar for a UI slice; Slice 1's `compute/` change
 still got full `pytest` coverage (#163), unaffected by this entry.
 Python suite unaffected by this entry (no `compute/` changes): still
 458 passed, 1 skipped.
+
+---
+
+## 2026-09-08 -- Part F Slice 3 built: the Calculator, single-card mode
+
+### 165. First interactive/client-side code in this repo -- a Server
+Action, not a new endpoint, and an end-to-end cross-check against an
+already-independently-verified number
+
+Asked to build Slice 3 (F.8). `/calculator`: a Server Component page
+(fetches the card list server-side, same pattern as the Catalog) plus
+a Client Component form (`CalculatorForm.tsx`, the first "use client"
+code in `web/`) for the dynamic spend-row UI. Submission goes through
+`calculator/actions.ts`'s `runEvaluate` -- a Server Action invoked
+directly from the client's event handler with a plain spend-row array
+(not a native `<form action>`, since the dynamic add/remove-row UX
+doesn't map cleanly onto FormData field naming; confirmed this is the
+documented pattern by reading Next.js's own bundled docs rather than
+assuming from training data, given `web/AGENTS.md`'s own warning that
+this version may differ). No new HTTP endpoint added to `app/main.py`
+-- `/evaluate` already returns everything this screen renders (F.3's
+own "no new API need" call for this screen, held).
+
+**A real constraint found before writing the form**: `evaluate_card`
+raises a `ValueError` (-> HTTP 422) if a card has a COUNTABLE benefit
+(e.g. Priority Pass lounge visits) and the caller supplies no explicit
+`benefit_need`/`benefit_unit_value` -- true of every PRIME-family card
+and ELITE, all ingested this session. `runEvaluate` fetches the
+selected card's own detail server-side (reusing Slice 1's `getCard`)
+and auto-supplies `benefit_need`/`benefit_unit_value`=0 for every
+countable benefit found -- the same "assume this cardholder doesn't
+use lounge access, a SCENARIO CHOICE not a claim about the real
+entitlement" posture every golden's own `assumptions` block already
+takes in this repo, not invented fresh here. Surfaced honestly in the
+result (`benefit_value` always reads 0 for these cards, not hidden or
+faked as if it were unlimited).
+
+**Verified against a number already independently verified, not just
+internally consistent**: submitted Bank of Maharashtra SBI Card PRIME
+at grocery=Rs.2,40,000 + ecommerce=Rs.3,60,000 through the LIVE running
+form -- the result (NACV Rs.5,700.24 steady-state, Rs.2,161.42 year-1,
+year-1 fee Rs.3,538.82, waiver achieved) matched the PRIME-family
+golden exactly (docs/DECISIONS.md #157), reproduced through a
+completely different path (browser form submission -> Server Action ->
+HTTP -> `evaluate_card`) than the one that originally verified it
+(direct pytest call). Switching to base `SBI Card PRIME` with the same
+spend reproduced the identical NACV again -- independently re-confirms
+#157's own "byte-identical across the PRIME family" finding through
+the UI, not assumed to still hold.
+
+**A genuine gap surfaced as an honest error, not special-cased away**:
+BPCL SBI Card OCTANE's currency has 2 redemption routes with no default
+-- selecting it in the Calculator correctly failed with `currency
+'bpcl_octane_points' has 2 routes (['bpcl_redemption',
+'shop_n_smile_catalog']); a primary route must be declared`, rendered
+plainly in a red error panel. No route-picker UI was built to work
+around this (deferred -- a real route-selection UI is a later slice's
+work, not invented under Slice 3's own "smallest possible" scope); the
+generic error-surfacing design (catch, display `err.message` verbatim)
+already handles it correctly with zero special-casing, which is itself
+a confirmation the design decision was right, not just convenient.
+
+**One real mobile bug found and fixed**: the spend row (category
+select + amount input + geography select + Remove button) used a
+non-wrapping flex row -- on a 375px viewport it overflowed the
+viewport horizontally instead of wrapping, cut off mid-row. Fixed with
+`flex-wrap` + constrained select/input widths; verified via a fresh
+mobile screenshot showing a clean two-line wrap instead.
+
+### Verification
+
+`npm run lint` (clean), `npx tsc --noEmit` (clean), `npm run build`
+(clean, `/calculator` also marked dynamic like the Catalog page --
+same build-time-API-independence fix as #164 applied consistently).
+Manually verified against a running `uvicorn` + `next dev` pair: the
+happy path (Bank of Maharashtra PRIME, matches #157's golden exactly),
+a card switch reproducing the same NACV (base PRIME), the countable-
+benefit auto-zero fix (no 422 on any PRIME-family card), the multi-
+route error path (BPCL OCTANE), and a 375px mobile viewport (post-fix,
+clean wrap). No automated frontend test suite added, same posture as
+#164 -- Part F §F.8's own working-style note. Python suite unaffected
+(no `compute/` changes): still 458 passed, 1 skipped.

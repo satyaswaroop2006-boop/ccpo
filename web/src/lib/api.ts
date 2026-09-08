@@ -56,6 +56,58 @@ export class CardNotFoundError extends Error {
   }
 }
 
+// Mirrors app/schemas.py::SpendItemIn.
+export interface SpendItemIn {
+  category: string;
+  annual_amount: string; // Decimal, sent as a string -- FastAPI/Pydantic parses numeric strings exactly, no float round-trip
+  channel?: string;
+  geography?: "domestic" | "international";
+  merchant_group?: string;
+}
+
+// Mirrors app/schemas.py::AssumptionsIn -- only the fields Slice 3 needs
+// to set (benefit_need/benefit_unit_value, to satisfy countable benefits
+// per evaluateCard's own doc comment below); every other field keeps its
+// own server-side default.
+export interface AssumptionsIn {
+  benefit_need?: Record<string, string>;
+  benefit_unit_value?: Record<string, string>;
+}
+
+// Mirrors app/schemas.py::TraceLineOut / NACVOut / EvaluateResponse.
+export interface TraceLineEntry {
+  kind: string;
+  amount: string;
+  label: string;
+  flags: string[];
+}
+
+export interface NACVOut {
+  steady_state: string;
+  year_1: string;
+  three_year: string;
+  trace: TraceLineEntry[];
+}
+
+export interface EvaluateResponse {
+  card_key: string;
+  gross_reward_value: string;
+  milestone_value: string;
+  milestone_value_year1: string;
+  benefit_value: string;
+  waiver_achieved: boolean;
+  fee_steady: string;
+  fee_year1: string;
+  nacv: NACVOut;
+  flags: string[];
+}
+
+export class EvaluateError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
+}
+
 async function apiFetch(path: string): Promise<Response> {
   return fetch(`${API_BASE_URL}${path}`, {
     // Server-rendered catalog data (Part F §F.5's own SEO rationale for
@@ -81,6 +133,35 @@ export async function getCard(cardKey: string): Promise<CardDetail> {
   }
   if (!res.ok) {
     throw new Error(`GET /cards/${cardKey} failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+// POST-only, never cached (each call is a distinct, unrepeatable
+// computation over this specific spend/assumptions input) -- Part F
+// §F.0's "no screen computes a rupee value" boundary: this is the ONE
+// place Slice 3 ever asks compute/ for a number, never derives one
+// itself.
+export async function evaluateCard(
+  cardKey: string,
+  spend: SpendItemIn[],
+  assumptions: AssumptionsIn = {},
+): Promise<EvaluateResponse> {
+  const res = await fetch(`${API_BASE_URL}/evaluate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ card_key: cardKey, spend, assumptions }),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    let detail = body;
+    try {
+      detail = JSON.parse(body).detail ?? body;
+    } catch {
+      // body wasn't JSON -- fall through with the raw text
+    }
+    throw new EvaluateError(res.status, typeof detail === "string" ? detail : JSON.stringify(detail));
   }
   return res.json();
 }

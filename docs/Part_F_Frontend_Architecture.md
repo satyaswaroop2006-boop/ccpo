@@ -388,9 +388,30 @@ Restating CLAUDE.md's own rules as they bind this layer specifically:
    site's own visual language (replaced with `not-found.tsx`). Clean
    `lint`/`tsc --noEmit`/`build`, plus manual browser verification
    against the live 21-card catalog and a mobile viewport check.
-3. **Slice 3**: Calculator, single-card mode (`/evaluate`) — smaller than
-   portfolio mode, exercises the spend-input form once before Slice 4
-   reuses it. Still no auth (public, per F.6).
+3. **Slice 3 — DONE (2026-09-08, docs/DECISIONS.md #165)**: Calculator,
+   single-card mode (`/evaluate`). A Server Action (`calculator/
+   actions.ts`), not a new HTTP endpoint -- the client form calls it
+   directly with a plain spend-row array (the documented pattern for a
+   Server Function invoked from a Client Component's event handler).
+   Auto-supplies `benefit_need`/`benefit_unit_value`=0 for every
+   COUNTABLE benefit on the selected card (fetched server-side inside
+   the action) -- `evaluate_card` otherwise raises on cards like every
+   PRIME-family one, which all carry a Priority Pass Lounge benefit;
+   same SCENARIO CHOICE posture this repo's own goldens already take,
+   surfaced honestly via `benefit_value` rather than hidden. End-to-end
+   verified against a REAL, already-independently-verified number:
+   Bank of Maharashtra SBI Card PRIME at grocery=Rs.2,40,000/ecommerce=
+   Rs.3,60,000 through the live form reproduced the exact PRIME-family
+   golden (NACV Rs.5,700.24 steady-state / Rs.2,161.42 year-1, #157) --
+   the full stack (form -> Server Action -> `/evaluate` -> engine)
+   agrees with the pytest-verified number, not just internally
+   consistent with itself. A genuine multi-route error (BPCL SBI Card
+   OCTANE's currency needs an explicit primary route) surfaced as a
+   clear, honest message with zero special-casing -- confirms the
+   generic error-surfacing design decision, doesn't paper over the gap.
+   One real mobile bug found and fixed: the spend row (category +
+   amount + geography + remove) overflowed the viewport horizontally
+   instead of wrapping -- `flex-wrap` fix, verified on a 375px screenshot.
 4. **Slice 4**: Calculator, portfolio mode (`/optimise`) — the frontier
    chart, checklist, classification badges, robustness headline.
 5. **Slice 5**: Supabase Auth wiring — session handling in Next.js, the

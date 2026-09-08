@@ -373,7 +373,22 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       `not-found.tsx`). Verified via `npm run lint`/`tsc --noEmit`/
       `npm run build` (all clean) plus manual browser verification
       against the live catalog (21 real+synthetic cards render
-      correctly; mobile viewport checked). Slices 3-7 (Calculator,
+      correctly; mobile viewport checked). **Slice 3 done** (#165):
+      the Calculator, single-card mode -- a Server Action
+      (`calculator/actions.ts`), not a new endpoint, calling the
+      existing `/evaluate`. Auto-supplies `benefit_need`/
+      `benefit_unit_value`=0 for countable benefits (every PRIME-family
+      card and ELITE need this or `/evaluate` 422s) -- same scenario-
+      choice posture this repo's own goldens already take. Verified
+      end-to-end against an ALREADY-independently-verified number: Bank
+      of Maharashtra SBI Card PRIME through the live form reproduced
+      the exact PRIME-family golden (Rs.5,700.24 steady-state, #157),
+      and base PRIME with the same spend reproduced it again,
+      re-confirming #157's "byte-identical across the family" finding
+      through a second, independent path. A multi-route card (BPCL
+      OCTANE) surfaced a clean, honest error with no special-casing.
+      One real mobile bug found and fixed (a spend row overflowed the
+      viewport instead of wrapping). Slices 4-7 (portfolio Calculator,
       auth, Ingestion Review, Publish) not started.
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
