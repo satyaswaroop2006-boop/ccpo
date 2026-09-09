@@ -6110,3 +6110,87 @@ chart, size-recommendation checklist, classification, excluded-cards
 disclosure) -- see the mobile note above for what wasn't completed.
 Python suite unaffected (no `compute/` changes): still 458 passed, 1
 skipped.
+
+## 2026-09-09 -- Part F Slice 5 built: Supabase Auth wiring, magic link
+
+### 167. Default (unmodified) magic-link email template sends PKCE `?code=`,
+not `token_hash`/`type` -- a real dashboard limitation forced the fix,
+found by reading the installed `@supabase/ssr` source directly
+
+Asked to build Slice 5 (F.8): real Supabase Auth wired up now, but
+restricted to the single allow-listed account already decided in F.6
+(`ADMIN_ALLOWED_EMAIL`, server-only via `import "server-only"` in
+`lib/auth.ts`), applied to a placeholder `/admin` page first per F.8's
+own instruction, not to any real mutation yet. Chose magic-link
+(passwordless) sign-in over a password -- `signInWithOtp({email,
+options: {shouldCreateUser: false, ...}})`, where `shouldCreateUser:
+false` is the actual enforcement of "no sign-up flow" at the Auth
+level, not just a UI omission. Built the standard `@supabase/ssr`
+App Router pattern: separate browser/server clients (`lib/supabase/
+client.ts`/`server.ts`), `middleware.ts` refreshing the session once
+per navigation via `getClaims()` (validates the JWT signature; the
+currently-recommended call over `getSession()`), and `getAdminSession`
+comparing the session's email against the allow-list.
+
+**A real bug, reported directly by Satya, not caught in my own
+testing**: "the log in link is taking me to the page where it is
+asking to enter email ... and the link on the email is bringing me
+back to the same page" -- a circular loop. Root-caused by reading the
+INSTALLED PACKAGE SOURCE directly (`node_modules/@supabase/ssr/dist/
+module/createBrowserClient.js` and `createServerClient.js`), not
+assumed from memory or docs: both of `@supabase/ssr`'s client
+factories default to `flowType: "pkce"`. Under PKCE, Supabase's own
+hosted `/auth/v1/verify` endpoint -- which the project's DEFAULT,
+unmodified Magic Link email template points to via
+`{{ .ConfirmationURL }}` -- redirects back to `emailRedirectTo` with a
+`?code=` query param, not `token_hash`+`type` (which only appears if
+the template is manually edited to use `{{ .TokenHash }}`, the
+alternative pattern Supabase's own docs also describe). My original
+`auth/confirm/route.ts` only handled `token_hash`/`type`, so it always
+fell through to `redirect("/login?error=link_invalid")` -- exactly the
+loop reported.
+
+**First proposed fix (edit the email template) could not be applied
+on Satya's end** ("Could not do change to point number 1"), which
+ruled out the docs' other recommended pattern and required a fix that
+works with the UNMODIFIED default template. Rewrote `auth/confirm/
+route.ts` to check for `code` FIRST, calling `exchangeCodeForSession`
+(confirmed as the correct, currently-exported method by reading
+`node_modules/@supabase/auth-js/dist/module/GoTrueClient.d.ts`
+directly rather than assuming its signature) -- kept `token_hash`/
+`type` via `verifyOtp` as a second path, genuinely reachable if the
+template is ever customized later, not dead code.
+
+**`force-dynamic` on `/admin` is a correctness requirement here, not
+just this repo's usual build-robustness fix** (Catalog/Calculator,
+#164/#165): an auth-gated page depends on the visitor's own session
+cookie, so it can never be valid to statically prerender it once at
+build time, independent of whatever surfaced the bug (a build with
+`ADMIN_ALLOWED_EMAIL` unset threw during static prerendering, same
+symptom as before, stronger underlying reason this time).
+
+**A second, unrelated blocker hit during verification**: Supabase's
+own auth email-sending rate limit ("email rate limit exceeded") after
+repeated test sends in a short window -- not a code bug, resolved by
+waiting it out. Separately, confirmed that testing the flow through my
+own automated browser was the wrong approach regardless: PKCE ties the
+code verifier to the browser that called `signInWithOtp`, so the link
+has to be requested and clicked in the SAME browser -- Satya's own,
+not mine. Handed the whole flow to him for the real test.
+
+A third issue surfaced purely from environment state, not code: the
+`next dev`/`uvicorn` servers had been stopped between sessions, so the
+magic link pointed at a `localhost:3000` with nothing listening --
+diagnosed by checking listening ports directly rather than guessing,
+fixed by restarting both.
+
+### Verification
+
+`npm run lint` (clean), `npx tsc --noEmit` (clean), `npm run build`
+run twice -- once with the API running, once stopped -- both clean,
+both correctly showing `/admin` and `/auth/confirm` as dynamic (ƒ) and
+`/login` as static (○). End-to-end, in Satya's own browser against the
+live Supabase project: magic-link request -> real email -> link click
+-> landed on `/admin` showing "Signed in as satyaswaroop2006@gmail.com"
+-> Sign out -> redirected to `/login`. No `compute/` changes; Python
+suite unaffected.

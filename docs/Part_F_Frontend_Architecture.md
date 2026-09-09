@@ -441,10 +441,29 @@ Restating CLAUDE.md's own rules as they bind this layer specifically:
    just the API. Frontier chart and classification list built with
    plain CSS (no charting library), consistent with every prior slice's
    dependency-free approach.
-5. **Slice 5**: Supabase Auth wiring — session handling in Next.js, the
-   server-side allow-list check (F.6), applied to a placeholder endpoint
-   first to prove the mechanism works before any real mutation sits behind
-   it.
+5. **Slice 5 — DONE (2026-09-09, docs/DECISIONS.md #167)**: Supabase Auth
+   wiring — session handling in Next.js (`@supabase/ssr` browser/server
+   clients + `middleware.ts` refreshing the session via `getClaims()`),
+   the server-side allow-list check (F.6, `lib/auth.ts::getAdminSession`,
+   `server-only`-guarded), applied to a placeholder `/admin` page first
+   to prove the mechanism works before any real mutation sits behind it.
+   Magic-link sign-in (`signInWithOtp`, `shouldCreateUser: false` as the
+   actual enforcement of "no sign-up flow", not just a UI omission). A
+   real bug reported by Satya (a sign-in loop) was root-caused by reading
+   the installed `@supabase/ssr`/`@supabase/auth-js` source directly:
+   the project's default, unmodified Magic Link email template sends a
+   PKCE `?code=` param, not `token_hash`/`type` — fixed in `auth/confirm/
+   route.ts` via `exchangeCodeForSession` as the primary path (kept
+   `verifyOtp` as a fallback), specifically because the alternative fix
+   (editing the email template) wasn't available on Satya's dashboard.
+   `force-dynamic` on `/admin` here is a correctness requirement, not
+   just the usual build-robustness fix, since an auth-gated page can
+   never validly be static. Verified end-to-end in Satya's own browser
+   (PKCE ties the code verifier to the requesting browser, so this
+   couldn't be verified through an automated one): sign-in via a real
+   emailed magic link landed on `/admin`, sign-out returned to `/login`.
+   `npm run lint`/`npx tsc --noEmit`/`npm run build` all clean, build
+   verified both with the API running and stopped.
 6. **Slice 6**: `GET /review-queue` + `POST /source-links/{id}/approve`/
    `/reject` (F.3), auth-gated via Slice 5's mechanism, + the Ingestion
    Review screen's list/approve/reject UI.

@@ -405,7 +405,31 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       UI. Mobile verification partial -- a tool-side click hang under
       mobile emulation blocked live interaction testing of the
       Portfolio flow specifically, noted honestly rather than assumed
-      clean. Slices 5-7 (auth, Ingestion Review, Publish) not started.
+      clean. **Slice 5 done** (#167): real Supabase Auth (magic-link
+      sign-in, `@supabase/ssr` browser/server clients + `middleware.ts`),
+      restricted to the single allow-listed account per F.6
+      (`lib/auth.ts::getAdminSession`, `server-only`-guarded), applied
+      to a placeholder `/admin` page first (F.8's own instruction) --
+      no real mutation sits behind it yet. Satya reported a real bug
+      (a sign-in loop); root-caused by reading the installed
+      `@supabase/ssr`/`@supabase/auth-js` package source directly (not
+      assumed from docs/memory): the project's default, unmodified
+      Magic Link email template sends a PKCE `?code=` param, not
+      `token_hash`/`type`. Fixed in `auth/confirm/route.ts` via
+      `exchangeCodeForSession` as the primary path (kept `verifyOtp` as
+      a fallback) -- chosen specifically because the alternative fix
+      (editing the email template to emit `token_hash`) wasn't
+      available on Satya's dashboard. `force-dynamic` on `/admin` here
+      is a correctness requirement, not just the usual build-robustness
+      fix, since an auth-gated page can never validly be static.
+      Verified end-to-end in Satya's own browser (PKCE ties the code
+      verifier to the requesting browser, so an automated browser
+      couldn't complete this verification): a real emailed magic link
+      landed on `/admin` showing "Signed in as
+      satyaswaroop2006@gmail.com", Sign out returned to `/login`.
+      `npm run lint`/`npx tsc --noEmit`/`npm run build` all clean, build
+      re-verified both with the API running and stopped. Slices 6-7
+      (Ingestion Review, guarded Publish) not started.
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
 change per stage: normalise → eligibility → match → accrue → caps →
