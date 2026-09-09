@@ -52,3 +52,29 @@ export async function getAdminSession(): Promise<AdminSession | null> {
 
   return { email };
 }
+
+/**
+ * Part F §F.6, Slice 6 (docs/DECISIONS.md #168): the raw access token,
+ * for forwarding to compute/'s own auth-gated endpoints (`lib/api.ts`'s
+ * review-queue/approve/reject functions) as a Bearer header -- F.6 is
+ * explicit that "the four auth-gated endpoints... check the verified
+ * session's user id" themselves, not just this Next.js layer, so those
+ * endpoints need the token, not just this app's own already-established
+ * session.
+ *
+ * `getSession()` (not `getClaims()`) here is safe specifically because
+ * this token's authenticity is INDEPENDENTLY re-verified server-side by
+ * `app/auth.py::get_admin_session` (a live call to Supabase's own Auth
+ * API) -- unlike trusting a decoded user object FROM `getSession()`
+ * directly (what Supabase's own docs warn against), nothing here is
+ * trusted based on this call alone. Callers must have already confirmed
+ * `getAdminSession()` is non-null before calling this -- it does no
+ * allow-list check of its own.
+ */
+export async function getAccessToken(): Promise<string | null> {
+  const supabase = await createClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  return session?.access_token ?? null;
+}

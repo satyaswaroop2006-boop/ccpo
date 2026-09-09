@@ -37,6 +37,8 @@ class StorageBackend(Protocol):
 
     def exists(self, bucket: str, object_path: str) -> bool: ...
 
+    def create_signed_url(self, bucket: str, object_path: str, expires_in: int) -> str: ...
+
 
 @dataclass(frozen=True)
 class SupabaseStorageBackend:
@@ -109,6 +111,28 @@ class SupabaseStorageBackend:
             )
             return resp.status_code == 200
 
+    def create_signed_url(self, bucket: str, object_path: str, expires_in: int) -> str:
+        """Part F §F.2.3's "at minimum a link to the stored snapshot, never
+        the live URL" -- the bucket is deliberately private (see this
+        class's own docstring), so a bare `storage_path` can't be linked
+        to directly; this is the one Storage API call that turns it into
+        something a browser can actually open, time-limited rather than a
+        permanent public URL. Confirmed directly against the live API
+        (not assumed from docs): `POST .../object/sign/{bucket}/{path}`
+        returns `{"signedURL": "/object/sign/<bucket>/<path>?token=..."}`
+        -- a path relative to `/storage/v1`, not a full URL, so it's
+        joined onto `base_url` here rather than returned as-is."""
+        with httpx.Client(timeout=self.timeout) as client:
+            resp = client.post(
+                f"{self.base_url}/storage/v1/object/sign/{bucket}/{object_path}",
+                headers=self._headers(),
+                json={"expiresIn": expires_in},
+            )
+            if resp.status_code != 200:
+                raise StorageError(f"signing {bucket}/{object_path} failed: {resp.status_code} {resp.text}")
+            signed_path = resp.json()["signedURL"]
+            return f"{self.base_url}/storage/v1{signed_path}"
+
 
 @dataclass
 class FakeStorageBackend:
@@ -133,3 +157,6 @@ class FakeStorageBackend:
 
     def exists(self, bucket: str, object_path: str) -> bool:
         return (bucket, object_path) in self.objects
+
+    def create_signed_url(self, bucket: str, object_path: str, expires_in: int) -> str:
+        return f"fake-signed://{bucket}/{object_path}?expires_in={expires_in}"

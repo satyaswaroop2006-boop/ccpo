@@ -428,8 +428,37 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       landed on `/admin` showing "Signed in as
       satyaswaroop2006@gmail.com", Sign out returned to `/login`.
       `npm run lint`/`npx tsc --noEmit`/`npm run build` all clean, build
-      re-verified both with the API running and stopped. Slices 6-7
-      (Ingestion Review, guarded Publish) not started.
+      re-verified both with the API running and stopped. **Slice 6
+      done** (#168): `GET /review-queue` + `POST /source-links/{id}/
+      approve`/`/reject`, built into `/admin` itself (replacing Slice
+      5's placeholder). Read F.6 literally: "the four auth-gated
+      endpoints... check the verified session's user id" means
+      `compute/` itself must verify, not just `web/` -- new `app/
+      auth.py::get_admin_session` checks the caller's bearer token
+      against Supabase's own Auth API directly, independent of `web/
+      lib/auth.ts`'s own (still-present) check. Two things F.2.3
+      requires as row content -- the drafted entity's own field values
+      and a link to the captured source document -- both fetched
+      generically: `ingest/review.py::_fetch_entity_fields` (`select *`
+      keyed by column name, same "discover, don't hardcode" posture
+      #166 used for countable-benefit keys) and new `ingest/storage.py::
+      create_signed_url` (the `sources` bucket is private, so "never
+      the live URL" needs a signed, time-limited link, not a bare
+      path). F.4's narrow write path carried through exactly -- each of
+      Approve/Reject is one fixed `UPDATE` touching only
+      `reviewer_status`(/`previous_rule_note`), `source_id` never
+      touched, asserted directly in tests by re-reading `source_id`
+      after a mutation. A real bug found by actually restarting the API
+      mid-slice, not a code bug: `uvicorn --env-file` is read once at
+      supervisor startup, not re-read on a WatchFiles code-reload, so a
+      newly-added `ADMIN_ALLOWED_EMAIL` needed a full server restart to
+      take effect. Verified end-to-end against the live database: a
+      disposable 4-item fixture reviewed live in Satya's own browser
+      (PKCE, same reason Slice 5 needed his), Approve/Reject-with-note
+      both confirmed correct by direct DB re-query, queue confirmed
+      back to empty after cleanup. 470/470 tests green (1 skipped,
+      pre-existing). Slice 7 (guarded Publish) not started -- still
+      blocked on the `bundle_path` schema prerequisite (#162).
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
 change per stage: normalise → eligibility → match → accrue → caps →

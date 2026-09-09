@@ -26,7 +26,9 @@ currency genuinely doesn't belong to one card more than another.
 """
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -41,15 +43,66 @@ _CARD_CHILD_TABLES = {
     "surcharge": "surcharges",
 }
 
+# entity_type -> table, for the generic "drafted value" row fetch below --
+# a superset of _CARD_CHILD_TABLES (adds the two entity types that don't
+# hang off a card_version at all, per this module's own docstring).
+_ENTITY_TABLES = {
+    "card_version": "card_versions",
+    "reward_currency": "reward_currencies",
+    "redemption_route": "redemption_routes",
+    **_CARD_CHILD_TABLES,
+}
+
+
+def _jsonable_field(value: Any) -> Any:
+    """Same Decimal/date-safety `app/schemas.py::_jsonable` already applies
+    to engine dataclasses, applied here to a raw DB row instead -- `jsonb`
+    columns (`selector`, `accrual`, `window_def`, ...) already come back
+    from psycopg3 as plain dict/list, so they pass through unchanged."""
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return value.isoformat()
+    return value
+
+
+def _fetch_entity_fields(cur, entity_type: str, entity_id: Any) -> dict[str, Any]:
+    """Part F §F.2.3's "the field's own value as drafted" -- a reviewer
+    can't approve/reject a citation without seeing what it's citing.
+    Fetched generically (`select *`, keyed by the row's own column names)
+    rather than a hand-written field list per entity_type: the same
+    "discover generically, don't hardcode a type-specific list" posture
+    docs/DECISIONS.md #166 already used for countable-benefit keys --
+    stays correct if a table gains a column later, a hardcoded list
+    wouldn't. `id`/`card_version_id` are dropped: both are already
+    surfaced elsewhere (`source_link_id`, the group's own label), not
+    part of "the value as drafted"."""
+    table = _ENTITY_TABLES.get(entity_type)
+    if table is None:
+        return {}
+    cur.execute(f"select * from {table} where id = %s", (entity_id,))
+    row = cur.fetchone()
+    if row is None:
+        return {}
+    columns = [desc.name for desc in cur.description]
+    return {
+        col: _jsonable_field(val)
+        for col, val in zip(columns, row)
+        if col not in ("id", "card_version_id")
+    }
+
 
 @dataclass(frozen=True)
 class ReviewQueueItem:
     source_link_id: str
     entity_type: str
     entity_key: str
+    entity_fields: dict[str, Any]
     confidence: str
     source_url: str
     source_type: str
+    source_title: str | None
+    source_storage_path: str | None
 
 
 @dataclass(frozen=True)
@@ -131,7 +184,8 @@ def _entity_key(cur, entity_type: str, entity_id: Any) -> str:
 def build_review_queue(conn: psycopg.Connection) -> tuple[ReviewQueueGroup, ...]:
     with conn.cursor() as cur:
         cur.execute(
-            "select sl.id, sl.entity_type, sl.entity_id, sl.confidence, s.url, s.source_type"
+            "select sl.id, sl.entity_type, sl.entity_id, sl.confidence,"
+            " s.url, s.source_type, s.title, s.storage_path"
             " from source_links sl join sources s on s.id = sl.source_id"
             " where sl.reviewer_status = 'unreviewed' order by sl.created_at",
         )
@@ -139,14 +193,16 @@ def build_review_queue(conn: psycopg.Connection) -> tuple[ReviewQueueGroup, ...]
 
         grouped: dict[str, list[ReviewQueueItem]] = {}
         cv_id_by_label: dict[str, Any] = {}
-        for sl_id, entity_type, entity_id, confidence, url, source_type in rows:
+        for sl_id, entity_type, entity_id, confidence, url, source_type, title, storage_path in rows:
             label, cv_id = _resolve(cur, entity_type, entity_id)
             cv_id_by_label[label] = cv_id
 
             entity_key = _entity_key(cur, entity_type, entity_id)
+            entity_fields = _fetch_entity_fields(cur, entity_type, entity_id)
             item = ReviewQueueItem(
                 source_link_id=str(sl_id), entity_type=entity_type, entity_key=entity_key,
-                confidence=confidence, source_url=url, source_type=source_type,
+                entity_fields=entity_fields, confidence=confidence, source_url=url,
+                source_type=source_type, source_title=title, source_storage_path=storage_path,
             )
             grouped.setdefault(label, []).append(item)
 

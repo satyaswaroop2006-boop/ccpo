@@ -464,9 +464,32 @@ Restating CLAUDE.md's own rules as they bind this layer specifically:
    emailed magic link landed on `/admin`, sign-out returned to `/login`.
    `npm run lint`/`npx tsc --noEmit`/`npm run build` all clean, build
    verified both with the API running and stopped.
-6. **Slice 6**: `GET /review-queue` + `POST /source-links/{id}/approve`/
-   `/reject` (F.3), auth-gated via Slice 5's mechanism, + the Ingestion
-   Review screen's list/approve/reject UI.
+6. **Slice 6 — DONE (2026-09-09, docs/DECISIONS.md #168)**: `GET
+   /review-queue` + `POST /source-links/{id}/approve`/`/reject` (F.3),
+   auth-gated, + the Ingestion Review screen's list/approve/reject UI —
+   built directly into `/admin` (Slice 5's placeholder page), not a new
+   route. Read F.6 literally: "the four auth-gated endpoints... check
+   the verified session's user id" means `compute/` itself, not just
+   `web/` — `app/auth.py::get_admin_session` verifies the caller's
+   bearer token against Supabase's own Auth API (`GET /auth/v1/user`),
+   independent of `web/lib/auth.ts`'s own (still-present, fast/
+   user-facing) check. Two things F.2.3 requires as row content, not as
+   optional polish, both fetched generically rather than hardcoded:
+   the drafted entity's own field values (`ingest/review.py::_fetch_
+   entity_fields`, `select *` keyed by column name — same "discover,
+   don't hardcode" posture #166 used for countable-benefit keys) and a
+   signed, time-limited link to the captured document (new `ingest/
+   storage.py::create_signed_url`, since the `sources` bucket is
+   private) — "never the live URL" satisfied literally. F.4's narrow
+   write path carried through exactly: each of Approve/Reject is one
+   fixed `UPDATE` touching only `reviewer_status`(/`previous_rule_
+   note`), `source_id` never touched, asserted directly in tests (not
+   just prose) by re-reading `source_id` after a mutation. Verified
+   end-to-end against the live database: a disposable 4-item fixture
+   reviewed live in Satya's own browser (PKCE — same reason Slice 5's
+   verification had to be his), Approve/Reject-with-note both confirmed
+   correct by direct re-query, then confirmed the queue returns to
+   empty after cleanup. 470/470 tests green (1 skipped, pre-existing).
 7. **Slice 7**: `POST /card-versions/{id}/publish` (F.3, F.4) + the
    guarded Publish button (F.2.3) — last, since it's the one irreversible
    action and deserves the most deliberate review before shipping.

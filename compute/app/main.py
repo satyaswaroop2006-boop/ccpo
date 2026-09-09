@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from functools import lru_cache
 
+import psycopg
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 
@@ -23,6 +24,7 @@ load_dotenv()  # compute/.env's DATABASE_URL, local-dev convenience; a real
 # deployment's own environment variables take precedence (load_dotenv()
 # never overwrites an already-set variable).
 
+from app.auth import AdminSession, get_admin_session  # noqa: E402
 from app.repository import (  # noqa: E402
     CardNotFoundError,
     CardRepository,
@@ -43,7 +45,12 @@ from app.schemas import (  # noqa: E402
     OptimiseRequest,
     OptimiseResponse,
     RecommendationStepOut,
+    RejectSourceLinkRequest,
+    ReviewQueueGroupOut,
+    ReviewQueueItemOut,
+    ReviewQueueResponse,
     RobustnessOut,
+    SourceLinkActionResponse,
     SpendItemIn,
     spend_input_from_items,
 )
@@ -51,6 +58,8 @@ from engine.card_bundle import CardRuleBundle  # noqa: E402
 from engine.evaluate import EvaluateAssumptions, evaluate_card  # noqa: E402
 from engine.normalise import SpendInput  # noqa: E402
 from engine.valuation import RewardCurrency  # noqa: E402
+from ingest.review import build_review_queue  # noqa: E402
+from ingest.storage import StorageError, SupabaseStorageBackend  # noqa: E402
 from optimiser.allocate import allocate  # noqa: E402
 from optimiser.candidates import select_candidates  # noqa: E402
 from optimiser.classify import classify_portfolio  # noqa: E402
@@ -310,3 +319,132 @@ def optimise(request: OptimiseRequest, repository: CardRepository = Depends(get_
         classification_candidates=[CardClassificationOut.from_classification(c) for c in classification.candidates],
         robustness=robustness_out,
     )
+
+
+def get_ingest_connection():
+    """A connection separate from `get_repository()`'s cached
+    `PostgresCardRepository` -- that repository's interface has no
+    review/mutation methods (it exists for card-catalog reads only), and
+    sharing its single long-lived connection across unrelated request
+    transactions isn't worth the coupling. Opened per request and closed
+    via this generator's own `finally` (FastAPI's standard yield-dependency
+    cleanup idiom -- guaranteed to run even if the route body raises,
+    unlike a manual `try/finally` duplicated in every route), same
+    one-connection-per-invocation pattern `ingest/cli.py::_connect()`
+    already uses for every DB subcommand -- immaterial at this endpoint's
+    traffic (a single admin reviewing a handful of source_links at a
+    time)."""
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise HTTPException(
+            status_code=500,
+            detail="DATABASE_URL is not configured -- Ingestion Review requires a live database.",
+        )
+    conn = psycopg.connect(database_url, prepare_threshold=None)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _signed_snapshot_url(storage_path: str | None) -> str | None:
+    """Part F §F.2.3's "at minimum a link to the stored snapshot, never
+    the live URL" (Slice 6). `storage_path` is stored as `"<bucket>/
+    <object_path>"` (`ingest/capture.py`'s own convention -- confirmed
+    against the live catalog, not assumed); the `sources` bucket is
+    private (`ingest/storage.py`'s own docstring), so a signed, time-
+    limited URL is the only thing a browser can actually open. `None`
+    in, `None` out -- a source captured before Part I's own capture
+    tooling existed (or never captured at all) has nothing to link to,
+    surfaced honestly rather than a broken link. A signing failure
+    (misconfigured credentials, object deleted out from under the DB
+    row) degrades the same way -- worth knowing about, never worth
+    failing the whole review-queue request over one bad link."""
+    if not storage_path:
+        return None
+    base_url = os.environ.get("SUPABASE_URL")
+    service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not base_url or not service_role_key:
+        return None
+    bucket, _, object_path = storage_path.partition("/")
+    if not object_path:
+        return None
+    storage = SupabaseStorageBackend(base_url=base_url, service_role_key=service_role_key)
+    try:
+        return storage.create_signed_url(bucket, object_path, expires_in=3600)
+    except StorageError:
+        return None
+
+
+@app.get("/review-queue", response_model=ReviewQueueResponse)
+def review_queue(
+    admin: AdminSession = Depends(get_admin_session),
+    conn: psycopg.Connection = Depends(get_ingest_connection),
+) -> ReviewQueueResponse:
+    """Part F §F.2.3's Ingestion Review screen (Slice 6) -- a thin wrapper
+    over `ingest/review.py::build_review_queue`'s own query (F.3), not a
+    reimplementation of it: the API's notion of "what's unreviewed" can
+    never drift from the CLI's. Auth-gated per F.6 -- `admin` is unused
+    beyond proving the dependency ran; the allow-list check itself is
+    `get_admin_session`'s job, not this route's."""
+    del admin
+    with conn:
+        groups = build_review_queue(conn)
+
+    groups_out = [
+        ReviewQueueGroupOut.from_group(
+            group,
+            [ReviewQueueItemOut.from_item(item, _signed_snapshot_url(item.source_storage_path)) for item in group.items],
+        )
+        for group in groups
+    ]
+    return ReviewQueueResponse(groups=groups_out)
+
+
+@app.post("/source-links/{source_link_id}/approve", response_model=SourceLinkActionResponse)
+def approve_source_link(
+    source_link_id: str,
+    admin: AdminSession = Depends(get_admin_session),
+    conn: psycopg.Connection = Depends(get_ingest_connection),
+) -> SourceLinkActionResponse:
+    """Part F §F.4's narrow write path, verbatim: the ONLY way this
+    endpoint ever mutates `source_links` is this one fixed `UPDATE`
+    statement -- no column name ever comes from request input, `source_id`
+    is never writable here at all. Directly responsive to docs/DECISIONS.md
+    #158's corruption incident (see F.4's own detailed rationale)."""
+    del admin
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update source_links set reviewer_status = 'approved' where id = %s returning id",
+                (source_link_id,),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown source_link id {source_link_id!r}")
+    return SourceLinkActionResponse(source_link_id=source_link_id, reviewer_status="approved")
+
+
+@app.post("/source-links/{source_link_id}/reject", response_model=SourceLinkActionResponse)
+def reject_source_link(
+    source_link_id: str,
+    request: RejectSourceLinkRequest,
+    admin: AdminSession = Depends(get_admin_session),
+    conn: psycopg.Connection = Depends(get_ingest_connection),
+) -> SourceLinkActionResponse:
+    """Same F.4 narrow-write-path posture as `approve_source_link` -- the
+    one additional column this fixed statement ever touches is
+    `previous_rule_note`, and only because F.2.3 requires a note to
+    reject at all (`RejectSourceLinkRequest.note`, `min_length=1`)."""
+    del admin
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update source_links set reviewer_status = 'rejected', previous_rule_note = %s"
+                " where id = %s returning id",
+                (request.note, source_link_id),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown source_link id {source_link_id!r}")
+    return SourceLinkActionResponse(source_link_id=source_link_id, reviewer_status="rejected")

@@ -77,3 +77,22 @@ def test_bad_credentials_raise_storage_error():
     bad = SupabaseStorageBackend(base_url=SUPABASE_URL, service_role_key="not-a-real-key")
     with pytest.raises(StorageError):
         bad.upload("sources", TEST_OBJECT_PATH, b"x", "text/plain")
+
+
+def test_create_signed_url_returns_a_working_link_to_the_uploaded_object(backend):
+    """Part F §F.2.3's "at minimum a link to the stored snapshot" (Slice 6,
+    docs/DECISIONS.md #168) -- verifies the FULL round trip against the
+    live API, not just that a URL-shaped string comes back: sign it, then
+    actually fetch it and confirm the uploaded bytes are what's served."""
+    backend.upload("sources", TEST_OBJECT_PATH, b"signed url smoke test content", "text/plain")
+    url = backend.create_signed_url("sources", TEST_OBJECT_PATH, expires_in=60)
+    assert url.startswith(SUPABASE_URL)
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.get(url)
+    assert resp.status_code == 200
+    assert resp.content == b"signed url smoke test content"
+
+
+def test_create_signed_url_for_missing_object_raises_storage_error(backend):
+    with pytest.raises(StorageError):
+        backend.create_signed_url("sources", "zz_test_ingest_capture/does-not-exist.txt", expires_in=60)

@@ -6194,3 +6194,107 @@ live Supabase project: magic-link request -> real email -> link click
 -> landed on `/admin` showing "Signed in as satyaswaroop2006@gmail.com"
 -> Sign out -> redirected to `/login`. No `compute/` changes; Python
 suite unaffected.
+
+## 2026-09-09 -- Part F Slice 6 built: Ingestion Review (review-queue,
+approve/reject)
+
+### 168. Auth-gating moved into `compute/` itself, not left to `web/`
+alone -- F.6 says the ENDPOINT checks the session, read literally;
+plus two generic-discovery additions (drafted-value display, signed
+snapshot links) `ingest/review.py`'s own docstring anticipated
+
+Asked to build Slice 6 (F.8): `GET /review-queue` + `POST /source-
+links/{id}/approve`/`/reject` (F.3) + the Ingestion Review screen's
+list/approve/reject UI (F.2.3), auth-gated via Slice 5's mechanism.
+Publish (Slice 7) stays out of scope, per F.8's own slice split and its
+still-open `bundle_path` schema prerequisite (#162).
+
+**Re-read F.6 closely before writing any endpoint code, because Slice
+5's own auth check lives entirely in `web/`**: "the four auth-gated
+endpoints (F.3) check the verified session's user id against a single
+allow-listed value... this is real auth plumbing... not a shortcut."
+That sentence is about the ENDPOINTS, not just the Next.js layer in
+front of them -- a Next.js-only check would mean anyone who can reach
+`compute/` directly (not through the Next.js app) bypasses auth
+entirely. Built `app/auth.py::get_admin_session`, a FastAPI dependency
+that verifies the caller's bearer token against Supabase's OWN Auth API
+(`GET /auth/v1/user`) rather than decoding the JWT locally -- confirmed
+directly against the live project (a bogus token gets a real 403 back,
+not assumed), reuses `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` already
+configured for `ingest/storage.py`, no new secret needed beyond a
+mirrored `ADMIN_ALLOWED_EMAIL` in `compute/.env` (same value as `web/
+.env.local`'s, held separately since the two are separately deployed
+services). `web/lib/auth.ts::getAdminSession` stays as the fast,
+user-facing gate (redirect before a button even renders); `app/auth.py`
+is the real one. `web/lib/auth.ts` gained `getAccessToken()` to forward
+the raw token -- safe to read via `getSession()` (not `getClaims()`)
+specifically because its authenticity is independently re-verified
+server-side by `compute/`, unlike trusting a decoded user object FROM
+`getSession()` directly (what Supabase's own docs warn against).
+
+**Two generic-discovery additions beyond the bare "thin wrapper"
+description, both explicitly required by F.2.3's own screen spec, not
+scope creep**: F.2.3 lists "the field's own value as drafted" and "at
+minimum a link to the stored snapshot, never the live URL" as required
+row content, not optional -- without them the screen can't do its one
+job (compare a drafted number against its citation). (1)
+`ingest/review.py::_fetch_entity_fields` fetches each cited row's own
+columns generically (`select *`, keyed by column name) rather than a
+hand-typed field list per `entity_type` -- the same "discover
+generically, don't hardcode a type-specific list" posture #166 already
+used for countable-benefit keys; stays correct if a table gains a
+column later. (2) `ingest/storage.py::create_signed_url` (new on
+`StorageBackend`) turns a private-bucket `storage_path` into a
+time-limited signed URL -- confirmed against the live Storage API, not
+assumed: `POST .../object/sign/{bucket}/{path}` returns a URL relative
+to `/storage/v1`, not a full URL, which the client joins onto
+`base_url` itself. `app/main.py::_signed_snapshot_url` degrades to
+`None` (not an error) when signing fails or no `storage_path` exists --
+one bad link never fails the whole review-queue request.
+
+**F.4's narrow-write-path design, carried through literally**:
+`approve_source_link`/`reject_source_link` are each one fixed `UPDATE`
+statement -- `reviewer_status` (and, for reject, `previous_rule_note`)
+only, `source_id` never touched, no column name ever comes from request
+input. `tests/test_api_review_queue.py` asserts this directly (re-reads
+`source_id` after an approve/reject and confirms it's unchanged) --
+directly responsive to #158's corruption incident, not just asserted in
+prose.
+
+**A real bug found by ACTUALLY restarting the API mid-slice**: after
+adding `ADMIN_ALLOWED_EMAIL` to `compute/.env`, `/review-queue`
+500'd with "ADMIN_ALLOWED_EMAIL is not configured" even though the
+file had it -- `uvicorn --env-file` is read once when the reloader
+supervisor process starts, not re-read on the WatchFiles code-reload
+that follows a `.py` edit. Fixed by stopping and restarting the whole
+server, not by touching code; worth recording since it looks like a
+code bug on first read and isn't one.
+
+**Verified end-to-end against the live database, not just unit-level**:
+inserted a disposable `zz_demo_slice6_*` fixture (same
+`link_bundle`-based pattern as this repo's own `zz_test_*` pytest
+fixtures) with 4 unreviewed `source_links`, had Satya open `/admin` in
+his own browser (PKCE ties the session to the browser that signed in --
+same reason Slice 5's own verification had to be his, not an automated
+one) and confirm: the populated queue rendered with drafted field
+values and grouping; Approve on one item and Reject-with-a-note on
+another both landed correctly (re-queried directly: `earning_rule`
+approved with no note, `card_version` rejected with note "Invalid
+card", the other two items still unreviewed); the queue correctly
+returned to its empty state after the fixture was cleaned up.
+
+### Verification
+
+`pytest`: 470 passed, 1 skipped (up from 461/1 -- new tests: `tests/
+test_app_auth.py` for `get_admin_session`'s own logic, `tests/
+test_api_review_queue.py` for the three new endpoints end-to-end
+against the live DB, extended `tests/test_ingest_review.py` for
+`entity_fields`/`source_title`/`source_storage_path`, extended `tests/
+test_ingest_capture_storage.py` for `create_signed_url` incl. a full
+sign-then-fetch round trip against the real Storage API). `npm run
+lint`/`npx tsc --noEmit` clean; `npm run build` run twice (API running,
+API stopped), both clean, both correctly showing `/admin` still dynamic
+(ƒ). Manual end-to-end browser verification as described above --
+empty state, populated state, approve, reject-with-note, and back to
+empty, all confirmed by Satya directly plus cross-checked against the
+live database after each step.

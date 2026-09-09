@@ -25,6 +25,7 @@ from optimiser.candidates import (
     DEFAULT_MAX_TOTAL,
     DEFAULT_STANDALONE_N,
 )
+from ingest.review import ReviewQueueGroup, ReviewQueueItem
 from optimiser.classify import CardClassification, DEFAULT_ICV_MEANINGFUL
 from optimiser.frontier import FrontierPoint, RecommendationStep, format_step
 from optimiser.scenarios import PortfolioRobustness
@@ -366,3 +367,60 @@ class OptimiseResponse(BaseModel):
     classification_owned: list[CardClassificationOut]  # the recommended portfolio's own cards (SS E.8)
     classification_candidates: list[CardClassificationOut]  # candidates not in the recommended portfolio
     robustness: RobustnessOut | None  # None when run_scenarios=False
+
+
+class ReviewQueueItemOut(BaseModel):
+    """Part F §F.2.3's Ingestion Review row (Slice 6). `entity_fields` is
+    the drafted row's own columns (`ingest/review.py::_fetch_entity_
+    fields`, already JSON-safe) -- deliberately an open dict, not a
+    hand-typed model per entity_type, same "don't re-duplicate Part C's
+    vocabulary a second time" call `CardDetailOut`/`_jsonable` already
+    made (§F.2.1/#163). `source_snapshot_url` is `None` when the source
+    has no `storage_path` on file (captured before Part I's own capture
+    tooling existed, or never captured) -- surfaced honestly, not a
+    broken link."""
+
+    source_link_id: str
+    entity_type: str
+    entity_key: str
+    entity_fields: dict[str, Any]
+    confidence: str
+    source_url: str
+    source_type: str
+    source_title: str | None
+    source_snapshot_url: str | None
+
+    @classmethod
+    def from_item(cls, item: ReviewQueueItem, snapshot_url: str | None) -> "ReviewQueueItemOut":
+        return cls(
+            source_link_id=item.source_link_id, entity_type=item.entity_type, entity_key=item.entity_key,
+            entity_fields=item.entity_fields, confidence=item.confidence, source_url=item.source_url,
+            source_type=item.source_type, source_title=item.source_title, source_snapshot_url=snapshot_url,
+        )
+
+
+class ReviewQueueGroupOut(BaseModel):
+    label: str  # "card:<key>" or "issuer:<key> (shared currency)" -- ingest/review.py's own grouping, rendered not printed
+    card_version_id: str | None
+    items: list[ReviewQueueItemOut]
+
+    @classmethod
+    def from_group(cls, group: ReviewQueueGroup, items: list[ReviewQueueItemOut]) -> "ReviewQueueGroupOut":
+        return cls(label=group.label, card_version_id=group.card_version_id, items=items)
+
+
+class ReviewQueueResponse(BaseModel):
+    groups: list[ReviewQueueGroupOut]
+
+
+class RejectSourceLinkRequest(BaseModel):
+    """F.2.3: "Reject (with a required note)" -- `min_length=1` enforces
+    that at the schema boundary, not just as a UI convention a caller
+    could bypass by hitting the endpoint directly."""
+
+    note: str = Field(min_length=1)
+
+
+class SourceLinkActionResponse(BaseModel):
+    source_link_id: str
+    reviewer_status: Literal["approved", "rejected"]

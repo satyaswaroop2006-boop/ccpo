@@ -127,6 +127,33 @@ def test_review_queue_omits_entities_once_approved(conn, linked):
         pytest.fail("card group disappeared entirely -- earning_rule should still be unreviewed")
 
 
+def test_review_queue_items_carry_the_drafted_entity_fields_and_source_metadata(conn, linked):
+    """Part F §F.2.3's "the field's own value as drafted" (Slice 6, docs/
+    DECISIONS.md #168) -- a reviewer can't approve/reject a citation
+    without seeing what it's citing. Checks both a card-child entity
+    (earning_rule) and an issuer-level one (redemption_route), since
+    they're fetched via two different code paths in `_fetch_entity_
+    fields`/`_ENTITY_TABLES`."""
+    groups = build_review_queue(conn)
+    by_label = {g.label: g for g in groups}
+
+    card_group = by_label[f"card:{CARD_KEY}"]
+    earning_rule_item = next(i for i in card_group.items if i.entity_type == "earning_rule")
+    assert earning_rule_item.entity_fields["key"] == "base"
+    assert earning_rule_item.entity_fields["accrual"]["type"] == "percentage"
+    assert earning_rule_item.entity_fields["accrual"]["rate"] == 0.01
+    assert "id" not in earning_rule_item.entity_fields
+    assert "card_version_id" not in earning_rule_item.entity_fields
+    assert earning_rule_item.source_title == "ZZ Test MITC"
+    assert earning_rule_item.source_storage_path == "sources/zz_test/src1.pdf"
+
+    currency_group = by_label[f"issuer:{ISSUER_KEY} (shared currency)"]
+    route_item = next(i for i in currency_group.items if i.entity_type == "redemption_route")
+    assert route_item.entity_fields["key"] == "stmt"
+    assert route_item.entity_fields["route_type"] == "statement_credit"
+    assert route_item.entity_fields["ratio"] == "1.000000"  # Decimal -> str, not float
+
+
 def test_review_queue_empty_state_reports_no_groups_for_this_fixture(conn, linked):
     with conn.cursor() as cur:
         cur.execute(

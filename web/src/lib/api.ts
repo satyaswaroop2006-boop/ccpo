@@ -244,3 +244,86 @@ export async function evaluateCard(
 export async function optimiseCards(spend: SpendItemIn[], assumptions: AssumptionsIn = {}): Promise<OptimiseResponse> {
   return postJson<OptimiseResponse>("/optimise", { spend, assumptions });
 }
+
+// Part F §F.2.3's Ingestion Review screen (Slice 6). Mirrors
+// app/schemas.py::ReviewQueueItemOut -- `entity_fields` stays an open
+// index signature for the same reason `RuleEntry` above does: the
+// drafted row's own columns vary per entity_type, and hand-typing one
+// interface per type would duplicate Part C/D's vocabulary a second
+// time (§F.2.1/#163's own precedent).
+export interface ReviewQueueItemEntry {
+  source_link_id: string;
+  entity_type: string;
+  entity_key: string;
+  entity_fields: Record<string, unknown>;
+  confidence: "high" | "medium" | "low";
+  source_url: string;
+  source_type: string;
+  source_title: string | null;
+  source_snapshot_url: string | null;
+}
+
+export interface ReviewQueueGroupEntry {
+  label: string;
+  card_version_id: string | null;
+  items: ReviewQueueItemEntry[];
+}
+
+export interface ReviewQueueResponse {
+  groups: ReviewQueueGroupEntry[];
+}
+
+// Thrown when compute/ itself rejects the caller (401/403) -- distinct
+// from EvaluateError so admin/page.tsx can tell "not authorized" apart
+// from any other API failure, even though both cases currently render
+// the same way (redirect already happened in lib/auth.ts's own check
+// before this would ever fire in practice; this is the defense-in-depth
+// path if the two checks ever disagree).
+export class AdminAuthError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+async function authedFetch(path: string, accessToken: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: { ...(init.headers ?? {}), Authorization: `Bearer ${accessToken}` },
+    // Mutation-adjacent, always-fresh data -- never cached, same
+    // reasoning as postJson's own no-store (each call reflects the
+    // CURRENT reviewer_status, not a stale snapshot).
+    cache: "no-store",
+  });
+  if (res.status === 401 || res.status === 403) {
+    throw new AdminAuthError(res.status, await res.text());
+  }
+  return res;
+}
+
+export async function getReviewQueue(accessToken: string): Promise<ReviewQueueResponse> {
+  const res = await authedFetch("/review-queue", accessToken);
+  if (!res.ok) {
+    throw new Error(`GET /review-queue failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+export async function approveSourceLink(sourceLinkId: string, accessToken: string): Promise<void> {
+  const res = await authedFetch(`/source-links/${encodeURIComponent(sourceLinkId)}/approve`, accessToken, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(`POST /source-links/${sourceLinkId}/approve failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+export async function rejectSourceLink(sourceLinkId: string, note: string, accessToken: string): Promise<void> {
+  const res = await authedFetch(`/source-links/${encodeURIComponent(sourceLinkId)}/reject`, accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  if (!res.ok) {
+    throw new Error(`POST /source-links/${sourceLinkId}/reject failed: ${res.status} ${await res.text()}`);
+  }
+}
