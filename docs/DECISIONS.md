@@ -6298,3 +6298,189 @@ API stopped), both clean, both correctly showing `/admin` still dynamic
 empty state, populated state, approve, reject-with-note, and back to
 empty, all confirmed by Satya directly plus cross-checked against the
 live database after each step.
+
+---
+
+## 2026-09-09 -- Slice 7's two schema prerequisites closed: `card_
+versions.bundle_path`/`golden_paths`
+
+### 169. Two additive columns, not one -- `golden_paths` is a SEPARATE
+gap from `bundle_path`, not solvable by a `bundle_`/`golden_` filename
+guess; asked Satya rather than inventing the convention
+
+Asked to build the `bundle_path` addition Part F's own final
+read-through flagged (#162) before starting Slice 7. Migration 0003
+(`supabase/migrations/0003_card_versions_bundle_path.sql`) adds
+`card_versions.bundle_path` (nullable text); `ingest/link.py::
+link_bundle` gained a `bundle_path: str | None = None` parameter,
+stored on the same `card_versions` INSERT it already builds;
+`ingest/cli.py`'s `link` subcommand passes its own existing positional
+`bundle_path` argument through automatically -- no new CLI flag needed
+for this half. Applied directly to the live Supabase database
+(`alter table` via a direct connection, same as how 0001/0002 were
+applied per this repo's own documented practice) and confirmed via
+`information_schema.columns`.
+
+**While wiring this in, found a SECOND, structurally identical gap,
+not assumed away**: `ingest.publish.publish_card_version` also
+requires `golden_paths` (>= 1 hand-computed golden JSON, Part I SS
+I.8) -- same "a human types a CLI flag, a button click has no human to
+ask" problem `bundle_path` solves, just for the golden file instead of
+the bundle file. Every real card ingested so far happens to follow a
+`bundle_<name>.json` / `golden_<name>.json` naming pattern (confirmed
+by listing `compute/ingestion/`), which COULD derive one path from the
+other with a string substitution -- but that pattern is something this
+repo has done organically, not a rule Part I's own spec states
+anywhere, so guessing at it risked a silent wrong path the moment a
+future card didn't follow it. Asked Satya directly (AskUserQuestion)
+rather than picking silently, per CLAUDE.md's own "if the spec is
+ambiguous, stop and ask" rule -- confirmed the schema-column approach,
+not the naming-convention guess.
+
+Migration 0004 (`supabase/migrations/0004_card_versions_golden_paths.sql`)
+adds `card_versions.golden_paths` (nullable `text[]`) -- same additive,
+no-backfill posture as 0003. `link_bundle` gained a matching
+`golden_paths: list[str] | None = None` parameter, and `ingest link`
+gained a NEW `--golden` flag (repeatable, mirrors `ingest publish
+--golden`'s own shape exactly) -- optional at link time (unlike
+`ingest publish --golden`, which stays required), since a bundle can
+legitimately be linked before its golden scenario is finished.
+
+**Neither column backfilled**, same reasoning both times: all 21
+`card_versions` rows live as of this entry are `status='published'`
+(verified directly against the DB, not assumed) -- Slice 7's Publish
+button only ever acts on a DRAFT row, and a published row is immutable
+(Part D Decision 2) and will never be re-published. A future
+devaluation of any of these cards creates a NEW `card_versions` row via
+`ingest link`, which gets both columns populated like any other
+post-migration link.
+
+### Verification
+
+`pytest tests/test_ingest_link.py`: 12 passed (4 new -- `bundle_path`/
+`golden_paths` each persisted-when-given and NULL-when-omitted).
+`tests/test_ingest_publish.py`/`tests/test_ingest_devaluation.py`/
+`tests/test_ingest_review.py`/`tests/test_api_review_queue.py`
+re-run unaffected (35 passed) -- confirms the new nullable columns
+don't disturb any existing `card_versions` read path (none use
+`select *`, checked directly via grep before assuming so). Both
+migrations applied directly against the live Supabase database and
+confirmed via `information_schema.columns`.
+
+---
+
+## 2026-09-10 -- Part F Slice 7 built: the guarded Publish button
+
+### 170. `publish_card_version` has no dry-run mode -- calling it to
+"check readiness" IS publishing; built `check_publish_gate` as a real,
+non-mutating twin instead of faking a preview. Found and fixed a real
+pre-existing crash (an unhandled golden path) while doing it. Also
+fixed a connection-lifecycle bug in Slice 6's own endpoints.
+
+Asked to build Slice 7 (F.8), the last piece of Part F v1: `POST
+/card-versions/{id}/publish` + the guarded Publish button (F.2.3/F.4),
+now unblocked by #169's schema prerequisites.
+
+**F.2.3 asks for a "ready to publish" indicator computed by "the SAME
+gate check `ingest publish` itself runs" -- but `publish_card_version`
+has no way to ask that question without the asking BEING the
+mutation**: it either raises `PublishError` (not ready) or succeeds
+(which means it already published). There's no third "would this pass,
+without doing it" return path. Rather than fake a preview by calling
+`publish_card_version` and hoping to catch the write before it lands
+(impossible -- the DB write is the last statement inside its own
+success path, not separable after the fact), extracted the FULL check
+sequence into a new `check_publish_gate` -- reuses every one of the
+same private check functions (`_check_source_links_gate`,
+`_check_source_provenance_gate`, `_check_engine_compatibility`,
+`_run_scenario`) so the two can never drift apart, but never writes
+anything and never raises for a remediable condition (only for a
+`card_version_id` that doesn't exist at all). `publish_card_version`
+itself is completely unchanged -- verified by re-running its full
+existing test file untouched (16/16 still passed) before adding
+anything new.
+
+**A real, pre-existing bug found while testing `check_publish_gate`,
+not while touching it**: `check_publish_gate` deliberately runs every
+check regardless of earlier failures (so a reviewer sees the whole
+picture, not just the first problem) -- and that surfaced a crash that
+was ALREADY POSSIBLE in `publish_card_version` too, just harder to
+hit: reading a golden file (`json.loads(Path(path).read_text())`) had
+no `try/except`, unlike the `--bundle` load two lines above it, which
+does. A nonexistent/unreadable golden path raised an uncaught
+`FileNotFoundError` instead of refusing loudly the way SS I.9 promises.
+`publish_card_version`'s own short-circuit-on-first-problem ordering
+mostly hid this (it usually raises on an earlier problem before ever
+reaching the golden loop), but not always -- a card_version with
+EVERYTHING else ready except a bad golden path would still crash.
+Fixed in both functions with the same try/except pattern the bundle
+load already used; added a regression test to `tests/test_ingest_
+publish.py` for `publish_card_version`'s own copy of this fix, not
+just `check_publish_gate`'s.
+
+**A second, independent bug found while designing this slice's OWN test
+strategy, in Slice 6's already-shipped endpoints**: all four DB-backed
+routes (`review_queue`, `approve_source_link`, `reject_source_link`,
+and this slice's new publish endpoint) used a bare `with conn:` around
+their transaction. Read `psycopg.Connection.__exit__`'s own source
+directly rather than assuming: it calls `commit()`/`rollback()` AND
+THEN `close()` the connection -- unlike `conn.transaction()`, which
+nests as a SAVEPOINT and never touches the connection's lifecycle.
+This never caused a PRODUCTION bug (`get_ingest_connection` opens one
+connection per request anyway, so closing it a request-early and
+having the dependency's own `finally` close it again is a harmless
+no-op, confirmed by every one of Slice 6's passing live tests) -- but
+it made it IMPOSSIBLE to test the Publish endpoint's success path
+safely: a test can't override `get_ingest_connection` to hand the
+route a connection wrapped in the test's own outer transaction (to
+force-rollback afterward, the same trick `test_ingest_publish.py`
+already uses) if the route's own `with conn:` commits AND closes that
+connection out from under the test regardless. Fixed all four routes
+to use `conn.transaction()` instead -- same commit/rollback semantics,
+correct nesting, connection lifecycle left entirely to the dependency
+that owns it.
+
+**Two-step confirmation, both halves enforced**: F.2.3 asks for
+"typing the card's own key to confirm" before the irreversible click.
+The typed text is checked TWICE -- client-side via the `<input
+pattern={...}>` attribute (the card's own key, regex-escaped, blocks
+form submission until it matches exactly, zero JavaScript) AND
+server-side (`PublishCardVersionRequest.confirm_card_key`, compared
+against the card's real key before anything else runs) -- the HTML
+attribute is a UX nicety, the server check is the actual enforcement,
+same defense-in-depth posture Reject's own required-note already
+established (#168).
+
+**`golden_paths`/`bundle_path` come from the `card_versions` row
+itself, never from request input** -- directly what #169's schema
+work was for: a button click has no human typing `--bundle`/`--golden`.
+The endpoint runs `check_publish_gate` FIRST (catches a `None`
+`bundle_path` as a clean 422 rather than crashing `publish_card_version`
+on it), then calls `publish_card_version` for the actual mutation --
+deliberately a check-then-act sequence, not pure redundancy:
+`publish_card_version`'s own re-validation closes the race window
+between the check and the click actually landing.
+
+### Verification
+
+`pytest`: 486 passed, 1 skipped (up from 474/1 -- new: `tests/
+test_ingest_publish.py`'s `check_publish_gate` tests plus the bad-
+golden-path regression test, `tests/test_api_publish.py`'s full
+endpoint suite including a real HTTP round trip through the SAVEPOINT/
+force-rollback pattern that proves the actual mutation runs and
+reliably undoes it). `npm run lint`/`npx tsc --noEmit` clean; `npm run
+build` run twice (API running, API stopped), both clean, `/admin`
+still dynamic. **Manual end-to-end verification against the live
+database, by Satya directly**: a disposable, fully-approved
+`zz_demo_slice7_*` fixture (with real `bundle_path`/`golden_paths` set)
+showed up under a new "Draft cards" section on `/admin` marked "ready
+to publish"; typing a WRONG confirmation key was refused by the browser
+(no submission at all); typing the exact key enabled the button;
+clicking it flipped `card_versions.status` to `'published'` with a real
+`published_at` timestamp, confirmed directly against the database, not
+just the UI's own claim. Fixture moved to `status='deprecated'`
+afterward (Part D's own permitted post-publish transition) since
+publishing is irreversible and this was disposable test data, not a
+real card.
+
+**Part F v1 (all 7 slices) is now complete.**

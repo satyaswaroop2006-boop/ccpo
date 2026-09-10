@@ -334,8 +334,8 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       `prime_uco`, `prime_cub`, `prime_ktb`, `prime_psb` — plus all 12
       synthetic fixtures. Phase 5 remains open-ended (more real-card
       families still to ingest); not marked complete.
-- [~] Phase 6 — frontend (Part F), in progress. `docs/Part_F_
-      Frontend_Architecture.md` v0.2 drafted and its five open scope/
+- [x] Phase 6 — frontend (Part F v1), complete (all 7 slices shipped).
+      `docs/Part_F_Frontend_Architecture.md` v0.2 drafted and its five open scope/
       stack/auth questions resolved directly with Satya (docs/
       DECISIONS.md #160): narrow v1 (Catalog + Calculator + Ingestion
       Review only, wallet/persistence/run-history all deferred), built
@@ -457,8 +457,43 @@ Phase 4's module list (Part E §E.0) is now fully built and wired.
       (PKCE, same reason Slice 5 needed his), Approve/Reject-with-note
       both confirmed correct by direct DB re-query, queue confirmed
       back to empty after cleanup. 470/470 tests green (1 skipped,
-      pre-existing). Slice 7 (guarded Publish) not started -- still
-      blocked on the `bundle_path` schema prerequisite (#162).
+      pre-existing). **Slice 7 done — Part F v1 complete** (#170):
+      `POST /card-versions/{id}/publish` + the guarded Publish button.
+      Closed the schema prerequisite first (#169): `card_versions`
+      gained `bundle_path` AND a second, analogous column `golden_paths`
+      (found while closing the first gap; confirmed the schema-column
+      fix with Satya rather than guessing at a bundle/golden filename
+      convention), both populated by `ingest link` going forward, no
+      backfill needed (every live card_version is already published).
+      `publish_card_version` has no dry-run mode -- calling it to check
+      readiness IS publishing -- so the "ready to publish" indicator
+      needed a genuinely new, non-mutating `check_publish_gate`,
+      composed from the same private check functions so it can never
+      drift from the real gate; `publish_card_version` itself untouched
+      (its full existing test suite re-run unmodified first). Found and
+      fixed two real bugs along the way, neither hypothetical: (1) an
+      unreadable golden file crashed uncaught inside `publish_card_
+      version` itself (pre-existing, just hard to hit -- its own
+      short-circuit ordering usually masked it) -- fixed with the same
+      try/except pattern the `--bundle` load already used; (2) Slice
+      6's four DB-backed endpoints used a bare `with conn:`, which
+      psycopg3's own source confirms commits AND closes the connection
+      -- never a production bug (the dependency already opens one
+      connection per request) but it blocked testing Publish's success
+      path safely, fixed by switching to `conn.transaction()`
+      everywhere. Confirmation enforced twice: an HTML `pattern`
+      attribute blocks submission client-side (zero JS) and the server
+      independently re-checks the typed card key before anything else
+      runs; `bundle_path`/`golden_paths` come from the DB, never
+      request input. Verified end-to-end against the live database, by
+      Satya directly: a disposable, fully-approved fixture showed up
+      "ready to publish", a wrong confirmation key was refused by the
+      browser, the correct key enabled Publish, and clicking it flipped
+      `card_versions.status` to `'published'` with a real timestamp,
+      confirmed directly against the database (then moved to
+      `deprecated` afterward, Part D's own permitted post-publish
+      transition, since it was disposable test data). 486/486 tests
+      green (1 skipped, pre-existing).
 
 Phase 2 was built stage by stage in pipeline order (C.4), one PR-sized
 change per stage: normalise → eligibility → match → accrue → caps →

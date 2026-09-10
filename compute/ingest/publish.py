@@ -150,6 +150,24 @@ class PublishResult:
     superseded_version_id: str | None = None  # Part I SS I.6 step 4, when this publish closes out a predecessor
 
 
+@dataclass(frozen=True)
+class PublishGateReport:
+    """SS I.8's full gate, reported without mutating anything -- Part F
+    §F.2.3's "all approved, ready to publish" indicator (Slice 7, docs/
+    DECISIONS.md #170) needs to ask "would this pass?" repeatedly (once
+    per render of the Ingestion Review screen) without that question
+    itself being the irreversible act. `problems`/`scenario_results`
+    mirror `PublishError`'s message / `PublishResult.scenario_results`
+    exactly -- same wording, same data, just returned instead of raised
+    (or discarded)."""
+
+    card_key: str
+    card_version_id: str
+    passed: bool
+    problems: tuple[str, ...]
+    scenario_results: tuple[ScenarioResult, ...]
+
+
 def _j(x: Any) -> str:
     return json.dumps(x)
 
@@ -591,6 +609,93 @@ def _run_scenario(bundle: CardRuleBundle, currencies: dict, golden_path: str, na
     return ScenarioResult(golden_path=golden_path, scenario_name=name, passed=not diffs, diffs=tuple(diffs))
 
 
+def check_publish_gate(
+    conn: psycopg.Connection, card_version_id: Any, golden_paths: list[str] | None, bundle_path: str | None,
+) -> PublishGateReport:
+    """Read-only twin of `publish_card_version`'s own gate check (Slice 7,
+    docs/DECISIONS.md #170) -- composes the SAME private check functions
+    (`_check_source_links_gate`, `_check_source_provenance_gate`,
+    `_check_engine_compatibility`, `_run_scenario`) so the two can never
+    silently drift apart, but never writes to the database and never
+    raises for a REMEDIABLE condition (not draft, gate problems found) --
+    only for `card_version_id` not existing at all, a genuine lookup
+    error rather than a readiness question. `publish_card_version` itself
+    is untouched by this function's existence: F.4's own design keeps
+    the actual mutation on that one unchanged code path, this is
+    additive.
+
+    Unlike `publish_card_version`, does NOT short-circuit on "not
+    draft" -- every check still runs and is reported, so a reviewer
+    looking at an already-published card_version (should that ever
+    happen) sees the full picture, not just the first reason.
+    `golden_paths`/`bundle_path` are `None`-tolerant (unlike
+    `publish_card_version`'s required 3rd/4th params) since a
+    card_version linked before migrations 0003/0004 -- or without
+    `--golden` at link time -- legitimately has neither recorded yet;
+    that's reported as its own problem, not a crash."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "select c.key, cv.status from card_versions cv join cards c on c.id = cv.card_id where cv.id = %s",
+            (card_version_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise PublishError(f"card_version {card_version_id} does not exist")
+        card_key, status = row
+
+        problems: list[str] = []
+        if status != "draft":
+            problems.append(f"card_version {card_version_id} (card {card_key!r}) has status {status!r}, not 'draft' -- nothing to publish")
+
+        problems.extend(_check_source_links_gate(cur, card_version_id))
+
+        if not bundle_path:
+            problems.append(
+                "no bundle_path recorded for this card_version (docs/DECISIONS.md #169) -- "
+                "source-provenance check cannot run"
+            )
+        else:
+            try:
+                bundle_file = load_ingestion_bundle(bundle_path)
+            except (OSError, ValueError) as e:
+                problems.append(f"bundle_path {bundle_path!r} could not be loaded: {type(e).__name__}: {e} -- source-provenance check skipped")
+            else:
+                problems.extend(_check_source_provenance_gate(cur, card_version_id, bundle_file))
+
+    bundle_dict = _fetch_bundle_dict_by_version_id(conn, card_version_id)
+    problems.extend(_check_engine_compatibility(bundle_dict))
+
+    scenario_results: list[ScenarioResult] = []
+    if not golden_paths:
+        problems.append("no golden_paths recorded for this card_version (docs/DECISIONS.md #169) -- Part I SS I.8 requires at least one hand-computed golden scenario")
+    else:
+        bundle = bundle_from_dict(bundle_dict)
+        currencies = currencies_from_dicts([_fetch_currency_dict(conn, card_version_id)])
+        for path in golden_paths:
+            try:
+                golden = json.loads(Path(path).read_text())
+            except (OSError, ValueError) as e:
+                problems.append(f"golden {path!r} could not be loaded: {type(e).__name__}: {e}")
+                continue
+            scenarios = _scenarios_in_golden(golden)
+            if not scenarios:
+                problems.append(f"{path}: no scenarios found (expected spend_annual/expected, at the top level or nested)")
+                continue
+            for name, scenario in scenarios:
+                scenario_results.append(_run_scenario(bundle, currencies, path, name, scenario))
+
+        if not scenario_results or not any(r.passed for r in scenario_results):
+            problems.append(
+                f"no passing golden scenario found across {len(scenario_results)} scenario(s) checked "
+                "(Part I SS I.8 requires >= 1)"
+            )
+
+    return PublishGateReport(
+        card_key=card_key, card_version_id=str(card_version_id), passed=not problems,
+        problems=tuple(problems), scenario_results=tuple(scenario_results),
+    )
+
+
 def publish_card_version(conn: psycopg.Connection, card_version_id: Any, golden_paths: list[str], bundle_path: str) -> PublishResult:
     with conn.cursor() as cur:
         cur.execute(
@@ -634,7 +739,17 @@ def publish_card_version(conn: psycopg.Connection, card_version_id: Any, golden_
 
     scenario_results: list[ScenarioResult] = []
     for path in golden_paths:
-        golden = json.loads(Path(path).read_text())
+        try:
+            golden = json.loads(Path(path).read_text())
+        except (OSError, ValueError) as e:
+            # docs/DECISIONS.md #170 -- found via check_publish_gate's own
+            # tests, which (unlike this function's early-raise-on-problems
+            # ordering above) can reach this loop even with OTHER problems
+            # already queued, so an unreadable/malformed golden path must
+            # degrade the same way an unreadable --bundle already does
+            # (see the try/except a few lines up), not crash uncaught.
+            problems.append(f"golden {path!r} could not be loaded: {type(e).__name__}: {e}")
+            continue
         scenarios = _scenarios_in_golden(golden)
         if not scenarios:
             problems.append(f"{path}: no scenarios found (expected spend_annual/expected, at the top level or nested)")

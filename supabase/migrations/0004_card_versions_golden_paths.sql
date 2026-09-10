@@ -1,0 +1,29 @@
+-- ============================================================================
+-- Credit Card Portfolio Optimiser — Migration 0004_card_versions_golden_paths.sql
+-- PostgreSQL 15+ / Supabase
+--
+-- Adds `card_versions.golden_paths` (nullable text[]) -- the second of
+-- two Slice 7 (Part F) schema prerequisites (docs/DECISIONS.md #169,
+-- alongside 0003's `bundle_path`). `ingest.publish.publish_card_version`
+-- takes a `golden_paths: list[str]` argument (Part I SS I.8: at least
+-- one hand-computed golden scenario must pass before publish) -- a
+-- human types `--golden <path>` (repeatable) at the CLI each time, but
+-- nothing recorded which golden file(s) back a given card_version, the
+-- same class of gap `bundle_path` closed for the bundle file itself.
+-- Explicitly NOT derived from `bundle_path` by a `bundle_`/`golden_`
+-- filename-substitution convention -- that pattern is something this
+-- repo has done organically so far, not a rule Part I actually
+-- specifies, and guessing at it risks a silent wrong path (confirmed
+-- with Satya directly rather than assumed).
+--
+-- Populated going forward by `ingest link`'s own new `--golden` flag
+-- (repeatable, mirrors `ingest publish --golden` exactly), stored
+-- alongside `bundle_path` on the same `card_versions` INSERT. Additive
+-- only, no backfill -- same reasoning as 0003: all 21 card_versions
+-- published as of this migration are `status='published'` (verified
+-- directly against the live DB), Slice 7's Publish button only ever
+-- acts on a DRAFT row, and a published row is immutable and will never
+-- be re-published.
+-- ============================================================================
+
+alter table card_versions add column golden_paths text[];

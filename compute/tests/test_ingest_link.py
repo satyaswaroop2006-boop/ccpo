@@ -157,6 +157,52 @@ def test_link_inserts_card_currency_rules_and_source_links(conn, issuer_id):
         assert rows == [("unreviewed", "high")]  # mitc -> high, per I.1's own weighting
 
 
+def test_link_persists_bundle_path_on_the_new_card_version(conn, issuer_id):
+    """Migration 0003 / docs/DECISIONS.md #169 -- the Slice 7 (Part F)
+    prerequisite: `card_versions.bundle_path`, populated by `link_bundle`'s
+    own new parameter, not left for a human to type at publish time."""
+    result = link_bundle(_bundle(), conn, bundle_path="compute/ingestion/bundle_zz_test.json")
+
+    with conn.cursor() as cur:
+        cur.execute("select bundle_path from card_versions where id = %s", (result.card_version_id,))
+        assert cur.fetchone()[0] == "compute/ingestion/bundle_zz_test.json"
+
+
+def test_link_leaves_bundle_path_null_when_not_given(conn, issuer_id):
+    """`bundle_path` is optional (default `None`) -- a caller with no file
+    path (e.g. a bundle assembled purely in memory) gets NULL, not an
+    error or a fabricated placeholder."""
+    result = link_bundle(_bundle(), conn)
+
+    with conn.cursor() as cur:
+        cur.execute("select bundle_path from card_versions where id = %s", (result.card_version_id,))
+        assert cur.fetchone()[0] is None
+
+
+def test_link_persists_golden_paths_on_the_new_card_version(conn, issuer_id):
+    """Migration 0004 / docs/DECISIONS.md #169 -- the second Slice 7
+    prerequisite, deliberately a separate column from `bundle_path`
+    (not derived from it by a filename convention -- confirmed with
+    Satya rather than assumed)."""
+    result = link_bundle(
+        _bundle(), conn,
+        bundle_path="compute/ingestion/bundle_zz_test.json",
+        golden_paths=["compute/ingestion/golden_zz_test.json"],
+    )
+
+    with conn.cursor() as cur:
+        cur.execute("select golden_paths from card_versions where id = %s", (result.card_version_id,))
+        assert cur.fetchone()[0] == ["compute/ingestion/golden_zz_test.json"]
+
+
+def test_link_leaves_golden_paths_null_when_not_given(conn, issuer_id):
+    result = link_bundle(_bundle(), conn)
+
+    with conn.cursor() as cur:
+        cur.execute("select golden_paths from card_versions where id = %s", (result.card_version_id,))
+        assert cur.fetchone()[0] is None
+
+
 def test_link_refuses_when_lint_fails_and_inserts_nothing(conn, issuer_id):
     bad = _bundle()
     del bad["earning_rules"][0]["source_refs"]  # no citation -> provenance_completeness fails

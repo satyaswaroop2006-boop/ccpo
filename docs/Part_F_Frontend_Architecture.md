@@ -490,14 +490,44 @@ Restating CLAUDE.md's own rules as they bind this layer specifically:
    verification had to be his), Approve/Reject-with-note both confirmed
    correct by direct re-query, then confirmed the queue returns to
    empty after cleanup. 470/470 tests green (1 skipped, pre-existing).
-7. **Slice 7**: `POST /card-versions/{id}/publish` (F.3, F.4) + the
-   guarded Publish button (F.2.3) — last, since it's the one irreversible
-   action and deserves the most deliberate review before shipping.
-   **Prerequisite, found during this document's final read-through**: a
-   `bundle_path` column on `card_versions` (F.4's own note) needs adding
-   and backfilling before this slice can call `publish_card_version` at
-   all — a small Part I/D-layer schema change, sequenced before Slice 7
-   starts, not blocking Slices 1–6.
+7. **Slice 7 — DONE (2026-09-10, docs/DECISIONS.md #170)**: `POST
+   /card-versions/{id}/publish` (F.3, F.4) + the guarded Publish button
+   (F.2.3). **Prerequisites closed first** (#169): `card_versions`
+   gained `bundle_path` AND `golden_paths` (a second, analogous gap
+   found while closing the first — confirmed the schema-column
+   approach with Satya rather than guessing at a filename convention),
+   both populated by `ingest link` going forward, neither backfilled
+   (all 21 live card_versions are already published, so nothing needs
+   it retroactively). `publish_card_version` itself has no dry-run
+   mode — calling it to "check readiness" IS publishing — so F.2.3's
+   "ready to publish" indicator needed a genuinely new, non-mutating
+   function (`check_publish_gate`), built by composing the SAME private
+   check functions rather than a second implementation, so the two can
+   never drift apart; `publish_card_version` itself is untouched (its
+   full pre-existing test suite re-run unmodified before adding
+   anything new). Found and fixed a real pre-existing crash while
+   testing it: an unreadable golden file raised uncaught instead of
+   refusing cleanly — present in `publish_card_version` too, just
+   harder to hit (its short-circuit-on-first-problem ordering usually
+   masked it). Also found and fixed a connection-lifecycle bug in
+   Slice 6's already-shipped endpoints (`with conn:` commits AND closes
+   the connection, discovered by reading psycopg3's own source — never
+   a production bug, but it blocked testing Publish's success path
+   safely; switched all four DB-backed routes to `conn.transaction()`).
+   Confirmation is enforced twice: an `<input pattern={cardKey}>` blocks
+   submission client-side with zero JavaScript, and the server
+   independently re-checks `confirm_card_key` against the real key
+   before anything else runs. `bundle_path`/`golden_paths` are read
+   from the DB, never from request input. Verified end-to-end against
+   the live database, by Satya directly: a disposable, fully-approved
+   fixture appeared under a new "Draft cards" section marked ready,
+   a wrong confirmation key was refused by the browser with no
+   submission, the correct key enabled Publish, and clicking it flipped
+   `card_versions.status` to `'published'` with a real timestamp,
+   confirmed directly against the database. 486/486 tests green (1
+   skipped, pre-existing).
+
+**Part F v1 is now complete — all 7 slices shipped.**
 
 Each slice: built, manually verified against a running `uvicorn` instance
 (per this repo's own "show what changed, which tests pass, one worked

@@ -1,0 +1,34 @@
+-- ============================================================================
+-- Credit Card Portfolio Optimiser — Migration 0003_card_versions_bundle_path.sql
+-- PostgreSQL 15+ / Supabase
+--
+-- Adds `card_versions.bundle_path` (nullable text) -- the schema
+-- prerequisite Part F's own final read-through flagged before Slice 7
+-- (the guarded Publish button) could be built (docs/DECISIONS.md #162):
+-- `ingest.publish.publish_card_version` has required a `bundle_path`
+-- argument since #161's source-provenance gate landed (it needs to
+-- re-read the ORIGINAL bundle file, not just the database), but nothing
+-- recorded which bundle file a given card_version was linked from -- a
+-- human typing `--bundle <path>` at the CLI has no equivalent for an
+-- API endpoint driven by a button click.
+--
+-- Populated going forward by `ingest link` at LINK time (`ingest/
+-- link.py::link_bundle`'s own `card_versions` INSERT gained a new
+-- `bundle_path` parameter) -- the bundle file's own path is already
+-- known at that moment, it just wasn't persisted before. Additive
+-- only, per Part D SS D.3's own stated pattern (see
+-- 0002_surcharge_waiver.sql): nullable column, no rewrite of any
+-- existing row.
+--
+-- NOT backfilled for the 21 card_versions already published as of this
+-- migration (verified directly against the live DB: every one is
+-- status='published', none 'draft'). Slice 7's Publish button only
+-- ever acts on a DRAFT card_version, and a published row is immutable
+-- (Part D Decision 2) and will never be re-published -- NULL here for
+-- an already-published row is inapplicable, not missing data. A future
+-- devaluation of any of these cards creates a NEW card_version row via
+-- `ingest link`, which gets `bundle_path` populated like any other
+-- post-migration link.
+-- ============================================================================
+
+alter table card_versions add column bundle_path text;

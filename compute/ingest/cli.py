@@ -175,7 +175,10 @@ def cmd_link(args: argparse.Namespace) -> int:
     bundle = load_ingestion_bundle(args.bundle_path)
     try:
         with conn:
-            result = link_bundle(bundle, conn, new_version=args.new_version)
+            result = link_bundle(
+                bundle, conn, new_version=args.new_version,
+                bundle_path=args.bundle_path, golden_paths=args.golden,
+            )
     except LinkError as e:
         print(f"ingest link: REFUSED -- {e}", file=sys.stderr)
         return 1
@@ -301,6 +304,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--new-version", action="store_true",
         help="Devaluation flow (SS I.6): supersede this card's latest PUBLISHED version with a new draft "
              "version_no+1, instead of refusing because the card already exists.",
+    )
+    link_parser.add_argument(
+        "--golden", action="append",
+        help="Path to a hand-computed golden JSON for this card_version (repeatable). Stored on the new "
+             "card_versions row (docs/DECISIONS.md #169) so `ingest publish`/Part F's Publish button don't "
+             "need a human to re-type it later -- optional here (unlike `ingest publish --golden`, which is "
+             "required): a bundle can be linked before its golden is ready.",
     )
     link_parser.set_defaults(func=cmd_link)
 

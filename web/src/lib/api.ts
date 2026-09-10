@@ -269,8 +269,22 @@ export interface ReviewQueueGroupEntry {
   items: ReviewQueueItemEntry[];
 }
 
+// Part F §F.2.3's card-level "ready to publish" indicator (Slice 7).
+// Mirrors app/schemas.py::DraftCardStatusOut -- listed separately from
+// `groups` above because a card_version with everything already
+// approved has nothing left to review (its group disappears entirely,
+// Slice 6's own behavior), but the Publish button still needs to
+// appear for it.
+export interface DraftCardStatusEntry {
+  card_key: string;
+  card_version_id: string;
+  ready_to_publish: boolean;
+  problems: string[];
+}
+
 export interface ReviewQueueResponse {
   groups: ReviewQueueGroupEntry[];
+  draft_cards: DraftCardStatusEntry[];
 }
 
 // Thrown when compute/ itself rejects the caller (401/403) -- distinct
@@ -326,4 +340,43 @@ export async function rejectSourceLink(sourceLinkId: string, note: string, acces
   if (!res.ok) {
     throw new Error(`POST /source-links/${sourceLinkId}/reject failed: ${res.status} ${await res.text()}`);
   }
+}
+
+// Part F §F.2.3/§F.4's guarded Publish button (Slice 7). Mirrors
+// app/schemas.py::ScenarioResultOut/PublishCardVersionResponse.
+export interface ScenarioResultEntry {
+  golden_path: string;
+  scenario_name: string;
+  passed: boolean;
+  diffs: string[];
+}
+
+export interface PublishCardVersionResponse {
+  card_key: string;
+  card_version_id: string;
+  scenario_results: ScenarioResultEntry[];
+  superseded_version_id: string | null;
+}
+
+export async function publishCardVersion(
+  cardVersionId: string,
+  confirmCardKey: string,
+  accessToken: string,
+): Promise<PublishCardVersionResponse> {
+  const res = await authedFetch(`/card-versions/${encodeURIComponent(cardVersionId)}/publish`, accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm_card_key: confirmCardKey }),
+  });
+  if (!res.ok) {
+    // No special-casing of a failed gate check here -- same "clean, honest
+    // message, zero special-casing" posture the multi-route-currency error
+    // already established (Slice 3, docs/DECISIONS.md #165). In practice
+    // the Publish button (page.tsx) only ever renders once `draft_cards`
+    // already reports `ready_to_publish: true`, so reaching a gate failure
+    // here means state changed between page load and click -- rare enough
+    // that Next.js's own error boundary is an honest way to surface it.
+    throw new Error(`POST /card-versions/${cardVersionId}/publish failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json();
 }

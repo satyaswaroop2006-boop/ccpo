@@ -25,6 +25,7 @@ from optimiser.candidates import (
     DEFAULT_MAX_TOTAL,
     DEFAULT_STANDALONE_N,
 )
+from ingest.publish import PublishGateReport, PublishResult, ScenarioResult
 from ingest.review import ReviewQueueGroup, ReviewQueueItem
 from optimiser.classify import CardClassification, DEFAULT_ICV_MEANINGFUL
 from optimiser.frontier import FrontierPoint, RecommendationStep, format_step
@@ -409,8 +410,33 @@ class ReviewQueueGroupOut(BaseModel):
         return cls(label=group.label, card_version_id=group.card_version_id, items=items)
 
 
+class DraftCardStatusOut(BaseModel):
+    """Part F §F.2.3's card-level "all approved, ready to publish"
+    indicator (Slice 7) -- computed by `ingest.publish.check_publish_gate`,
+    the SAME gate `ingest publish`/`publish_card_version` itself runs,
+    never a re-implementation (F.2.3's own explicit requirement: "the
+    UI's notion of 'ready' can never drift from the CLI's"). Listed
+    separately from `ReviewQueueGroupOut` because a card_version with
+    every source_link already approved has NOTHING left to review --
+    it disappears from `groups` entirely (Slice 6's own behavior) --
+    but the Publish button still needs to appear somewhere."""
+
+    card_key: str
+    card_version_id: str
+    ready_to_publish: bool
+    problems: list[str]
+
+    @classmethod
+    def from_report(cls, report: PublishGateReport) -> "DraftCardStatusOut":
+        return cls(
+            card_key=report.card_key, card_version_id=report.card_version_id,
+            ready_to_publish=report.passed, problems=list(report.problems),
+        )
+
+
 class ReviewQueueResponse(BaseModel):
     groups: list[ReviewQueueGroupOut]
+    draft_cards: list[DraftCardStatusOut]  # every draft card_version, whether or not it still has unreviewed items
 
 
 class RejectSourceLinkRequest(BaseModel):
@@ -424,3 +450,40 @@ class RejectSourceLinkRequest(BaseModel):
 class SourceLinkActionResponse(BaseModel):
     source_link_id: str
     reviewer_status: Literal["approved", "rejected"]
+
+
+class PublishCardVersionRequest(BaseModel):
+    """F.2.3: "requires a second, explicit confirmation (e.g. typing the
+    card's own key to confirm)... before the request fires." The typed
+    text is re-verified HERE, server-side, against the card's real key
+    (`app/main.py::publish_card_version_endpoint`) -- not trusted from
+    the client alone, same defense-in-depth posture as `RejectSourceLink
+    Request.note`'s own server-side `min_length` check."""
+
+    confirm_card_key: str = Field(min_length=1)
+
+
+class ScenarioResultOut(BaseModel):
+    golden_path: str
+    scenario_name: str
+    passed: bool
+    diffs: list[str]
+
+    @classmethod
+    def from_result(cls, r: ScenarioResult) -> "ScenarioResultOut":
+        return cls(golden_path=r.golden_path, scenario_name=r.scenario_name, passed=r.passed, diffs=list(r.diffs))
+
+
+class PublishCardVersionResponse(BaseModel):
+    card_key: str
+    card_version_id: str
+    scenario_results: list[ScenarioResultOut]
+    superseded_version_id: str | None  # Part I SS I.6 step 4 -- set when this publish also closed out a predecessor
+
+    @classmethod
+    def from_result(cls, result: PublishResult) -> "PublishCardVersionResponse":
+        return cls(
+            card_key=result.card_key, card_version_id=result.card_version_id,
+            scenario_results=[ScenarioResultOut.from_result(r) for r in result.scenario_results],
+            superseded_version_id=result.superseded_version_id,
+        )

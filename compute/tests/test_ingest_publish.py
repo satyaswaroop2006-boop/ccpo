@@ -41,7 +41,7 @@ pytestmark = pytest.mark.skipif(not DATABASE_REACHABLE, reason="DATABASE_URL not
 import psycopg  # noqa: E402
 
 from ingest.link import link_bundle  # noqa: E402
-from ingest.publish import PublishError, publish_card_version  # noqa: E402
+from ingest.publish import PublishError, check_publish_gate, publish_card_version  # noqa: E402
 from seeds.synthetic_cards import CARDS  # noqa: E402
 
 ISSUER_KEY = "zz_test_ingest_publish_issuer"
@@ -247,6 +247,21 @@ def test_publish_refuses_when_no_golden_scenario_passes(conn, issuer_id, tmp_pat
         publish_card_version(conn, result.card_version_id, [golden_path], bundle_path)
 
 
+def test_publish_refuses_cleanly_when_the_golden_path_does_not_exist(conn, issuer_id, tmp_path):
+    """docs/DECISIONS.md #170 -- found while building check_publish_gate's
+    own tests: an unreadable golden path used to crash uncaught
+    (`json.loads(Path(path).read_text())` had no try/except, unlike the
+    --bundle load two lines above it), reachable in practice whenever
+    everything ELSE about a card_version is otherwise ready to publish.
+    Fixed to degrade the same way a bad --bundle path already does."""
+    result = _link(conn)
+    _approve_everything(conn, result.card_version_id)
+    bundle_path = _write_bundle(tmp_path, _bundle())
+
+    with pytest.raises(PublishError, match="golden .* could not be loaded"):
+        publish_card_version(conn, result.card_version_id, [str(tmp_path / "does_not_exist.json")], bundle_path)
+
+
 def test_publish_refuses_when_db_state_has_drifted_from_what_lint_validated(conn, issuer_id, tmp_path):
     """Publish re-validates engine-compatibility against what's ACTUALLY
     in the database right now, not just what the original bundle file
@@ -379,3 +394,75 @@ def test_publish_accepts_a_multi_scenario_golden_file_needing_only_one_pass(conn
             by_name = {r.scenario_name: r.passed for r in publish_result.scenario_results}
             assert by_name == {"scenario_wrong": False, "scenario_right": True}
             raise _ForceRollback()
+
+
+# --- check_publish_gate (Slice 7, docs/DECISIONS.md #170) -- the
+# read-only twin used by Part F's "ready to publish" indicator. Unlike
+# publish_card_version's own tests above, none of these need the
+# SAVEPOINT/rollback trick: check_publish_gate never writes to the
+# database at all, so calling it -- even on the "everything passes"
+# path -- is safe to just call directly and assert on.
+
+def test_check_publish_gate_raises_when_card_version_does_not_exist(conn):
+    with pytest.raises(PublishError, match="does not exist"):
+        check_publish_gate(conn, "00000000-0000-0000-0000-000000000000", [], "unused.json")
+
+
+def test_check_publish_gate_reports_not_ready_for_an_already_published_card_without_raising(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            "select cv.id from cards c join card_versions cv on cv.card_id = c.id where c.key = %s",
+            (CARDS[0]["key"],),
+        )
+        cv_id = cur.fetchone()[0]
+
+    report = check_publish_gate(conn, cv_id, [], "unused.json")
+    assert report.passed is False
+    assert any("not 'draft'" in p for p in report.problems)
+
+
+def test_check_publish_gate_reports_missing_bundle_path_and_golden_paths_as_problems(conn, issuer_id):
+    """Exactly the case migrations 0003/0004 exist for: a card_version
+    linked without --bundle/--golden (or before those columns existed)
+    has NULL for both -- reported as specific problems, not a crash."""
+    result = _link(conn)  # link_bundle() with no bundle_path/golden_paths given
+    _approve_everything(conn, result.card_version_id)
+
+    report = check_publish_gate(conn, result.card_version_id, None, None)
+    assert report.passed is False
+    assert any("no bundle_path recorded" in p for p in report.problems)
+    assert any("no golden_paths recorded" in p for p in report.problems)
+
+
+def test_check_publish_gate_reports_unapproved_source_links_without_mutating_anything(conn, issuer_id, tmp_path):
+    result = _link(conn)  # fresh link -- everything 'unreviewed'
+    golden_path = _write_golden(tmp_path, _MATCHING_GOLDEN)
+    bundle_path = _write_bundle(tmp_path, _bundle())
+
+    report = check_publish_gate(conn, result.card_version_id, [golden_path], bundle_path)
+    assert report.passed is False
+    assert any("not approved" in p for p in report.problems)
+
+    with conn.cursor() as cur:
+        cur.execute("select status from card_versions where id = %s", (result.card_version_id,))
+        assert cur.fetchone()[0] == "draft"  # never touched
+
+
+def test_check_publish_gate_passes_when_everything_is_ready_and_still_never_mutates(conn, issuer_id, tmp_path):
+    result = _link(conn)
+    _approve_everything(conn, result.card_version_id)
+    golden_path = _write_golden(tmp_path, _MATCHING_GOLDEN)
+    bundle_path = _write_bundle(tmp_path, _bundle())
+
+    report = check_publish_gate(conn, result.card_version_id, [golden_path], bundle_path)
+    assert report.passed is True
+    assert report.problems == ()
+    assert report.card_key == CARD_KEY
+    assert len(report.scenario_results) == 1
+    assert report.scenario_results[0].passed is True
+
+    with conn.cursor() as cur:
+        cur.execute("select status, published_at from card_versions where id = %s", (result.card_version_id,))
+        status, published_at = cur.fetchone()
+        assert status == "draft"  # ready != published -- check_publish_gate never flips this
+        assert published_at is None

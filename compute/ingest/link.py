@@ -35,6 +35,22 @@ either every row for this card lands, or none does. This is the FIRST
 `seeds/seed.py`'s synthetic fixtures -- needs a reachable `DATABASE_URL`
 to run or test against (unlike `ingest lint`, which needs none).
 
+`bundle_path`/`golden_paths`, if given, are stored on the new
+`card_versions` row (migrations 0003/0004, docs/DECISIONS.md #169) --
+the two schema prerequisites Part F's own final read-through flagged
+before Slice 7's Publish button could be built (#162):
+`ingest.publish.publish_card_version` needs the ORIGINAL bundle FILE to
+re-verify source provenance (#161) plus >=1 golden path to check (Part
+I SS I.8), and a button click has no human typing `--bundle`/`--golden`
+to supply either. `None` (the default for both) is a legitimate value,
+not an oversight -- a caller with no file paths (e.g. a bundle
+assembled purely in memory) simply leaves both columns NULL, same as
+every card_version linked before these parameters existed.
+`golden_paths` is deliberately NOT derived from `bundle_path` by a
+`bundle_`/`golden_` filename-substitution convention -- confirmed with
+Satya directly that this repo's own naming pattern isn't a Part I rule,
+so guessing at it here would risk a silent wrong path.
+
 Three real prerequisites this module deliberately does NOT solve,
 discovered by trying to link CASHBACK SBI's real bundle before writing
 any of this code (docs/DECISIONS.md #133-#135), not assumed up front:
@@ -213,7 +229,10 @@ def _resolve_currency(cur, issuer_id: Any, currency: dict[str, Any]) -> tuple[An
     return currency_id, True, new_routes
 
 
-def link_bundle(bundle: dict[str, Any], conn: psycopg.Connection, new_version: bool = False) -> LinkResult:
+def link_bundle(
+    bundle: dict[str, Any], conn: psycopg.Connection, new_version: bool = False,
+    bundle_path: str | None = None, golden_paths: list[str] | None = None,
+) -> LinkResult:
     report = lint_bundle(bundle)
     if not report.passed:
         raise LinkError(
@@ -299,11 +318,11 @@ def link_bundle(bundle: dict[str, Any], conn: psycopg.Connection, new_version: b
             v = bundle.get("version", {})
             cur.execute(
                 "insert into card_versions (card_id, version_no, effective_from, joining_fee,"
-                " annual_fee, gst_rate, forex_markup, currency_id)"
-                " values (%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+                " annual_fee, gst_rate, forex_markup, currency_id, bundle_path, golden_paths)"
+                " values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
                 (
                     card_id, version_no, bundle["effective_from"], v.get("joining_fee", 0), v.get("annual_fee", 0),
-                    v.get("gst_rate", 0.18), v.get("forex_markup", 0.035), currency_id,
+                    v.get("gst_rate", 0.18), v.get("forex_markup", 0.035), currency_id, bundle_path, golden_paths,
                 ),
             )
             cv_id = cur.fetchone()[0]

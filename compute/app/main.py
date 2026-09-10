@@ -35,6 +35,7 @@ from app.schemas import (  # noqa: E402
     CardClassificationOut,
     CardDetailOut,
     CardSummaryOut,
+    DraftCardStatusOut,
     EvaluateRequest,
     EvaluateResponse,
     ExcludedCardOut,
@@ -44,6 +45,8 @@ from app.schemas import (  # noqa: E402
     NextBestSpendResultOut,
     OptimiseRequest,
     OptimiseResponse,
+    PublishCardVersionRequest,
+    PublishCardVersionResponse,
     RecommendationStepOut,
     RejectSourceLinkRequest,
     ReviewQueueGroupOut,
@@ -58,6 +61,7 @@ from engine.card_bundle import CardRuleBundle  # noqa: E402
 from engine.evaluate import EvaluateAssumptions, evaluate_card  # noqa: E402
 from engine.normalise import SpendInput  # noqa: E402
 from engine.valuation import RewardCurrency  # noqa: E402
+from ingest.publish import PublishError, check_publish_gate, publish_card_version  # noqa: E402
 from ingest.review import build_review_queue  # noqa: E402
 from ingest.storage import StorageError, SupabaseStorageBackend  # noqa: E402
 from optimiser.allocate import allocate  # noqa: E402
@@ -376,20 +380,58 @@ def _signed_snapshot_url(storage_path: str | None) -> str | None:
         return None
 
 
+def _list_draft_card_version_ids(conn: psycopg.Connection) -> list[str]:
+    """Every DRAFT card_version, not just ones with unreviewed source_links
+    -- a card_version that's already fully approved has NOTHING left in
+    `build_review_queue`'s own output (Slice 6's own behavior: the group
+    disappears once every item is reviewed), but F.2.3's Publish button
+    still needs to appear for it. Ordered by card key for a stable,
+    predictable render order."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "select cv.id from card_versions cv join cards c on c.id = cv.card_id"
+            " where cv.status = 'draft' order by c.key",
+        )
+        return [str(row[0]) for row in cur.fetchall()]
+
+
 @app.get("/review-queue", response_model=ReviewQueueResponse)
 def review_queue(
     admin: AdminSession = Depends(get_admin_session),
     conn: psycopg.Connection = Depends(get_ingest_connection),
 ) -> ReviewQueueResponse:
-    """Part F §F.2.3's Ingestion Review screen (Slice 6) -- a thin wrapper
-    over `ingest/review.py::build_review_queue`'s own query (F.3), not a
-    reimplementation of it: the API's notion of "what's unreviewed" can
-    never drift from the CLI's. Auth-gated per F.6 -- `admin` is unused
-    beyond proving the dependency ran; the allow-list check itself is
-    `get_admin_session`'s job, not this route's."""
+    """Part F §F.2.3's Ingestion Review screen (Slice 6-7) -- a thin
+    wrapper over `ingest/review.py::build_review_queue`'s own query
+    (F.3) for the list/approve/reject half, plus `ingest/publish.py::
+    check_publish_gate` (Slice 7) for the "ready to publish" indicator
+    -- neither is a reimplementation, so the API's notion of "unreviewed"
+    or "ready" can never drift from the CLI's. Auth-gated per F.6 --
+    `admin` is unused beyond proving the dependency ran; the allow-list
+    check itself is `get_admin_session`'s job, not this route's.
+
+    Uses `conn.transaction()`, not a bare `with conn:` -- the latter
+    calls `conn.commit()`/`conn.rollback()` AND `conn.close()` on the
+    connection directly (confirmed by reading psycopg3's own
+    `Connection.__exit__`), which would close the connection this
+    request's `get_ingest_connection` dependency still owns (its own
+    `finally` closes it again after the route returns) -- redundant in
+    production (closing twice is harmless) but breaks the ability to
+    test this route by overriding the dependency with a connection the
+    TEST also wants to keep using afterward (`conn.transaction()`
+    nests as a SAVEPOINT instead, never touching the connection's own
+    lifecycle)."""
     del admin
-    with conn:
+    with conn.transaction():
         groups = build_review_queue(conn)
+        draft_ids = _list_draft_card_version_ids(conn)
+        draft_cards = []
+        for cv_id in draft_ids:
+            cur = conn.cursor()
+            cur.execute("select bundle_path, golden_paths from card_versions where id = %s", (cv_id,))
+            bundle_path, golden_paths = cur.fetchone()
+            cur.close()
+            report = check_publish_gate(conn, cv_id, golden_paths, bundle_path)
+            draft_cards.append(DraftCardStatusOut.from_report(report))
 
     groups_out = [
         ReviewQueueGroupOut.from_group(
@@ -398,7 +440,7 @@ def review_queue(
         )
         for group in groups
     ]
-    return ReviewQueueResponse(groups=groups_out)
+    return ReviewQueueResponse(groups=groups_out, draft_cards=draft_cards)
 
 
 @app.post("/source-links/{source_link_id}/approve", response_model=SourceLinkActionResponse)
@@ -411,9 +453,12 @@ def approve_source_link(
     endpoint ever mutates `source_links` is this one fixed `UPDATE`
     statement -- no column name ever comes from request input, `source_id`
     is never writable here at all. Directly responsive to docs/DECISIONS.md
-    #158's corruption incident (see F.4's own detailed rationale)."""
+    #158's corruption incident (see F.4's own detailed rationale).
+
+    `conn.transaction()`, not `with conn:` -- see `review_queue`'s own
+    docstring for why."""
     del admin
-    with conn:
+    with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
                 "update source_links set reviewer_status = 'approved' where id = %s returning id",
@@ -435,9 +480,12 @@ def reject_source_link(
     """Same F.4 narrow-write-path posture as `approve_source_link` -- the
     one additional column this fixed statement ever touches is
     `previous_rule_note`, and only because F.2.3 requires a note to
-    reject at all (`RejectSourceLinkRequest.note`, `min_length=1`)."""
+    reject at all (`RejectSourceLinkRequest.note`, `min_length=1`).
+
+    `conn.transaction()`, not `with conn:` -- see `review_queue`'s own
+    docstring for why."""
     del admin
-    with conn:
+    with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
                 "update source_links set reviewer_status = 'rejected', previous_rule_note = %s"
@@ -448,3 +496,78 @@ def reject_source_link(
     if row is None:
         raise HTTPException(status_code=404, detail=f"unknown source_link id {source_link_id!r}")
     return SourceLinkActionResponse(source_link_id=source_link_id, reviewer_status="rejected")
+
+
+@app.post("/card-versions/{card_version_id}/publish", response_model=PublishCardVersionResponse)
+def publish_card_version_endpoint(
+    card_version_id: str,
+    request: PublishCardVersionRequest,
+    admin: AdminSession = Depends(get_admin_session),
+    conn: psycopg.Connection = Depends(get_ingest_connection),
+) -> PublishCardVersionResponse:
+    """Part F §F.2.3/§F.4's guarded Publish button (Slice 7, docs/
+    DECISIONS.md #170) -- the one irreversible action in this UI (Part D
+    Decision 2). Calls `ingest.publish.publish_card_version` directly,
+    the SAME code path `ingest publish` uses -- "no new publish logic,
+    no new failure modes" (F.4's own explicit design constraint).
+    `bundle_path`/`golden_paths` are read from the `card_versions` row
+    itself (migrations 0003/0004, #169), never from request input -- a
+    button click has no human typing `--bundle`/`--golden`.
+
+    Two checks before the real mutation, neither optional:
+    1. `confirm_card_key` must match the card's actual key -- F.2.3's
+       "type the card's own key to confirm", re-verified server-side
+       (the HTML form's own `pattern` attribute is a UX nicety, not the
+       enforcement).
+    2. `check_publish_gate` runs FIRST, read-only -- if it reports NOT
+       ready, refuse with a clean 422 naming every problem, without
+       ever calling `publish_card_version` (which would otherwise crash
+       on a `None` `bundle_path` rather than refusing cleanly). This is
+       deliberately a check-then-act sequence, not pure redundancy:
+       `publish_card_version` still re-validates canonically before its
+       own mutation, closing the race window between this check and
+       the click actually landing.
+
+    `conn.transaction()`, not `with conn:` -- see `review_queue`'s own
+    docstring for why. `publish_card_version`'s own internal
+    `conn.transaction()` nests as a SAVEPOINT under this one (the same
+    nesting `tests/test_ingest_publish.py`'s own docstring documents
+    and relies on), so the whole request -- gate check included --
+    commits or rolls back as one atomic unit.
+    """
+    del admin
+    with conn.transaction():
+        cur = conn.cursor()
+        cur.execute(
+            "select c.key, cv.bundle_path, cv.golden_paths"
+            " from card_versions cv join cards c on c.id = cv.card_id where cv.id = %s",
+            (card_version_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"unknown card_version id {card_version_id!r}")
+        card_key, bundle_path, golden_paths = row
+
+        if request.confirm_card_key != card_key:
+            raise HTTPException(
+                status_code=422,
+                detail=f"confirmation key {request.confirm_card_key!r} does not match this card's key {card_key!r}",
+            )
+
+        try:
+            report = check_publish_gate(conn, card_version_id, golden_paths, bundle_path)
+        except PublishError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        if not report.passed:
+            raise HTTPException(
+                status_code=422,
+                detail=f"publish gate failed for card_version {card_version_id} (card {card_key!r}): " + "; ".join(report.problems),
+            )
+
+        try:
+            result = publish_card_version(conn, card_version_id, golden_paths or [], bundle_path)
+        except PublishError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    return PublishCardVersionResponse.from_result(result)

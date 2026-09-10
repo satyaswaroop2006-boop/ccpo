@@ -1,16 +1,13 @@
 import { redirect } from "next/navigation";
-import { getReviewQueue, type ReviewQueueItemEntry } from "@/lib/api";
+import { getReviewQueue, type DraftCardStatusEntry, type ReviewQueueItemEntry } from "@/lib/api";
 import { getAccessToken, getAdminSession } from "@/lib/auth";
-import { approveSourceLinkAction, rejectSourceLinkAction, signOut } from "./actions";
+import { approveSourceLinkAction, publishCardVersionAction, rejectSourceLinkAction, signOut } from "./actions";
 
 // Part F §F.8's own Slice 5 instruction was "a placeholder endpoint first
 // to prove the mechanism works before any real mutation sits behind it" --
-// this is that real mutation (Slice 6, docs/DECISIONS.md #168): the
-// Ingestion Review screen itself, replacing Slice 5's placeholder text
-// behind the SAME `getAdminSession` gate. Publish (Slice 7) isn't here
-// yet -- it needs a schema prerequisite (`card_versions.bundle_path`,
-// flagged in Part F §F.4's own final read-through) this slice doesn't
-// touch.
+// Slice 6 (docs/DECISIONS.md #168) built the real Ingestion Review
+// screen itself; this is Slice 7 (#170), the guarded Publish button, the
+// last piece of F.2.3, behind the SAME `getAdminSession` gate.
 //
 // force-dynamic: an auth-gated page depending on the visitor's own
 // session cookie (and now also live, frequently-changing review-queue
@@ -93,6 +90,60 @@ function ReviewItemRow({ item }: { item: ReviewQueueItemEntry }) {
   );
 }
 
+function DraftCardCard({ card }: { card: DraftCardStatusEntry }) {
+  return (
+    <section className="rounded-lg border border-neutral-200 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-neutral-900">{card.card_key}</h2>
+        <span
+          className={
+            card.ready_to_publish
+              ? "rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800"
+              : "rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-600"
+          }
+        >
+          {card.ready_to_publish ? "ready to publish" : "not ready"}
+        </span>
+      </div>
+
+      {!card.ready_to_publish && (
+        <ul className="mt-2 list-inside list-disc text-xs text-neutral-600">
+          {card.problems.map((problem) => (
+            <li key={problem}>{problem}</li>
+          ))}
+        </ul>
+      )}
+
+      {card.ready_to_publish && (
+        // F.2.3: "requires a second, explicit confirmation (e.g. typing
+        // the card's own key to confirm)... before the request fires."
+        // `pattern` blocks submission until the typed text matches
+        // EXACTLY -- pure HTML, no client-side JS -- and the server
+        // action re-verifies it again (defense in depth, this repo's
+        // own working style for irreversible actions).
+        <form action={publishCardVersionAction} className="mt-3 flex flex-wrap items-center gap-2">
+          <input type="hidden" name="card_version_id" value={card.card_version_id} />
+          <input
+            type="text"
+            name="confirm_card_key"
+            required
+            pattern={card.card_key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}
+            placeholder={`Type "${card.card_key}" to confirm`}
+            title={`Type ${card.card_key} exactly to enable Publish`}
+            className="flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+          />
+          <button
+            type="submit"
+            className="shrink-0 rounded-md border border-neutral-900 bg-neutral-900 px-3 py-1 text-xs font-medium text-white hover:bg-neutral-700"
+          >
+            Publish (irreversible)
+          </button>
+        </form>
+      )}
+    </section>
+  );
+}
+
 export default async function AdminPage() {
   const session = await getAdminSession();
   if (!session) {
@@ -108,7 +159,7 @@ export default async function AdminPage() {
     redirect("/login");
   }
 
-  const { groups } = await getReviewQueue(accessToken);
+  const { groups, draft_cards } = await getReviewQueue(accessToken);
 
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-16">
@@ -125,7 +176,7 @@ export default async function AdminPage() {
       </div>
       <p className="mt-2 text-sm text-neutral-600">
         Signed in as <span className="font-medium text-neutral-900">{session.email}</span>. Approve or reject each
-        cited source below (Part F §F.2.3) -- Publish lands in a later slice.
+        cited source below (Part F §F.2.3).
       </p>
 
       {groups.length === 0 ? (
@@ -142,6 +193,21 @@ export default async function AdminPage() {
               </ul>
             </section>
           ))}
+        </div>
+      )}
+
+      {draft_cards.length > 0 && (
+        <div className="mt-12">
+          <h2 className="text-lg font-semibold tracking-tight text-neutral-900">Draft cards</h2>
+          <p className="mt-1 text-sm text-neutral-600">
+            Every card_version in draft, whether or not it still has items above -- a fully-approved card has
+            nothing left to review, but still needs a Publish click.
+          </p>
+          <div className="mt-4 space-y-4">
+            {draft_cards.map((card) => (
+              <DraftCardCard key={card.card_version_id} card={card} />
+            ))}
+          </div>
         </div>
       )}
     </main>

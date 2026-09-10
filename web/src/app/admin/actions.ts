@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { approveSourceLink, rejectSourceLink } from "@/lib/api";
+import { approveSourceLink, publishCardVersion, rejectSourceLink } from "@/lib/api";
 import { getAccessToken, getAdminSession } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
@@ -64,5 +64,28 @@ export async function rejectSourceLinkAction(formData: FormData): Promise<void> 
     throw new Error("a note is required to reject a source link");
   }
   await rejectSourceLink(sourceLinkId, note.trim(), token);
+  revalidatePath("/admin");
+}
+
+/**
+ * Part F §F.2.3/§F.4's guarded Publish button (Slice 7, docs/
+ * DECISIONS.md #170) -- the one irreversible action in this UI (Part D
+ * Decision 2). `confirm_card_key` comes from the SAME form as
+ * `card_version_id` (page.tsx's `<input pattern={cardKey}>` blocks
+ * submission client-side until the typed text matches exactly, no JS
+ * needed) -- re-verified server-side by compute/'s own endpoint, not
+ * trusted from the client alone, same posture as reject's own note.
+ */
+export async function publishCardVersionAction(formData: FormData): Promise<void> {
+  const token = await requireAccessToken();
+  const cardVersionId = formData.get("card_version_id");
+  const confirmCardKey = formData.get("confirm_card_key");
+  if (typeof cardVersionId !== "string" || !cardVersionId) {
+    throw new Error("missing card_version_id");
+  }
+  if (typeof confirmCardKey !== "string" || !confirmCardKey) {
+    throw new Error("missing confirm_card_key");
+  }
+  await publishCardVersion(cardVersionId, confirmCardKey, token);
   revalidatePath("/admin");
 }
